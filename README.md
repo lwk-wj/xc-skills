@@ -78,6 +78,9 @@ xc-skills remove
 # 或者使用别名
 xc-skills cleanup
 xc-skills rm
+
+# 清理全局目录下的技能
+xc-skills remove --global
 ```
 
 ### 6. 参数化运行

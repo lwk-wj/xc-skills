@@ -246,32 +246,49 @@ cli
 
 // --- Remove Command ---
 cli
-  .command('remove', 'Remove installed skills from the current project')
+  .command('remove', 'Remove installed skills from the current project or global directory')
   .alias('cleanup')
   .alias('rm')
-  .action(async () => {
-    p.intro(`${pc.bgRed(pc.white(' xc-skills remove '))}`)
+  .option('-g, --global', 'Remove global skills instead of project skills')
+  .action(async (options) => {
+    const isGlobal = options.global
+    p.intro(`${pc.bgRed(pc.white(isGlobal ? ' xc-skills remove (Global) ' : ' xc-skills remove (Project) '))}`)
 
     const cwd = process.cwd()
-    const potentialDirs = ['.agent', '.trae', '.claude', '.codex']
-    const foundDirs: string[] = []
+    const candidates: { name: string, path: string }[] = []
 
-    for (const dir of potentialDirs) {
-      const skillsPath = join(cwd, dir, 'skills')
-      if (fs.existsSync(skillsPath)) {
-        foundDirs.push(dir)
+    if (isGlobal) {
+      // 扫描全局目录
+      for (const agent of AGENTS) {
+        const fullPath = agent.path.replace(/^~/, os.homedir())
+        if (fs.existsSync(fullPath)) {
+          candidates.push({ name: agent.name, path: fullPath })
+        }
+      }
+    } else {
+      // 扫描当前项目目录
+      const potentialDirs = ['.agent', '.trae', '.claude', '.codex']
+      for (const dir of potentialDirs) {
+        const skillsPath = join(cwd, dir, 'skills')
+        if (fs.existsSync(skillsPath)) {
+          candidates.push({ name: dir, path: join(cwd, dir) })
+        }
       }
     }
 
-    if (foundDirs.length === 0) {
-      p.log.info('在当前项目中没有发现已安装的技能目录。')
+    if (candidates.length === 0) {
+      p.log.info(isGlobal ? '没有发现已安装的全局技能目录。' : '在当前项目中没有发现已安装的技能目录。')
       process.exit(0)
     }
 
     const targets = await p.multiselect({
-      message: '选择要清除的目录 (Select directories to remove)',
-      options: foundDirs.map(dir => ({ value: dir, label: `${dir}/skills` })),
-      initialValues: foundDirs
+      message: `选择要清除的${isGlobal ? '全局' : '项目'}目录 (Select to remove)`,
+      options: candidates.map(c => ({ 
+        value: c.path, 
+        label: c.name, 
+        hint: c.path.replace(os.homedir(), '~') 
+      })),
+      initialValues: candidates.map(c => c.path)
     }) as string[]
 
     if (p.isCancel(targets) || targets.length === 0) {
@@ -280,7 +297,7 @@ cli
     }
 
     const confirm = await p.confirm({
-      message: `确认删除选中的 ${targets.length} 个目录及其所有技能？(Confirm deletion?)`,
+      message: `确认删除选中的 ${targets.length} 个目录及其所有技能？此操作不可逆！(Confirm deletion?)`,
       initialValue: false
     })
 
@@ -290,15 +307,14 @@ cli
     }
 
     const s = p.spinner()
-    for (const dir of targets) {
-      s.start(`正在删除 ${dir}...`)
+    for (const targetPath of targets) {
+      const display = targetPath.replace(os.homedir(), '~')
+      s.start(`正在删除 ${display}...`)
       try {
-        // 我们只删除内部的 skills 文件夹，或者如果隐藏文件夹内没有其他内容，则删除整个隐藏文件夹
-        const targetPath = join(cwd, dir)
         await fs.remove(targetPath)
-        s.stop(`已删除: ${dir}`)
+        s.stop(`已删除: ${display}`)
       } catch (err: any) {
-        s.stop(pc.red(`删除 ${dir} 失败: ${err.message}`))
+        s.stop(pc.red(`删除 ${display} 失败: ${err.message}`))
       }
     }
 
@@ -306,6 +322,6 @@ cli
   })
 
 cli.help()
-cli.version('1.0.8')
+cli.version('1.0.9')
 
 cli.parse()
