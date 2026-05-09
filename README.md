@@ -61,7 +61,15 @@ xc-skills add https://e.coding.net/your-team/skills.git
 xc-skills add . --dir my-rules
 ```
 
-### 4. 参数化运行
+### 4. 指定输出路径
+
+如果你想把技能安装到一个特定的文件夹（而不是默认的 Agent 路径或 `.agent/skills`），可以使用 `--out` 参数：
+
+```bash
+xc-skills add . --out ./my-debug-folder
+```
+
+### 5. 参数化运行
 
 ```bash
 # 自动安装所有技能到 Antigravity（跳过交互）
@@ -74,7 +82,8 @@ xc-skills add . --yes --agent Antigravity --skill *
 | --- | --- |
 | `-s, --skill <names>` | 指定要安装的技能名称（逗号分隔，或用 `*` 表示全部） |
 | `-a, --agent <names>` | 指定目标 Agent 名称（逗号分隔，或用 `*` 表示全部） |
-| `-d, --dir <dir>` | 指定技能存放的目录名（默认为 `skills`） |
+| `-d, --dir <dir>` | 指定源目录中技能存放的目录名（默认为 `skills`） |
+| `-o, --out <path>` | 指定输出的目标目录路径 |
 | `-y, --yes` | 跳过所有确认和交互步骤，使用默认值 |
 | `-v, --version` | 查看版本号 |
 | `-h, --help` | 查看帮助信息 |

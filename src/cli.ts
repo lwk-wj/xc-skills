@@ -33,6 +33,7 @@ cli
   .option('-s, --skill <skills>', 'Specific skills to install')
   .option('-a, --agent <agents>', 'Specific agents to install to')
   .option('-d, --dir <dir>', 'The directory name containing skills', { default: 'skills' })
+  .option('-o, --out <path>', 'Specify a custom output directory')
   .option('-y, --yes', 'Skip confirmation prompts')
   .action(async (source, options) => {
     p.intro(`${pc.bgCyan(pc.black(' xc-skills '))}`)
@@ -49,19 +50,15 @@ cli
       s.start(`正在尝试下载技能库: ${source}`)
       
       let success = false
-      
-      // 1. 优先尝试 degit (更轻量)
       try {
         const emitter = degit(source, { cache: false, force: true, verbose: false })
         await emitter.clone(tempPath)
         success = true
         s.stop(`下载成功 (degit)`)
       } catch (err) {
-        // 2. 如果 degit 不支持（如 Coding.net），则兜底使用 git clone
         try {
           s.message(`degit 不支持此平台，正在尝试使用 git clone...`)
           execSync(`git clone --depth 1 ${source} ${tempPath}`, { stdio: 'ignore' })
-          // 下载后移除 .git 目录以保持目录纯净
           if (fs.existsSync(join(tempPath, '.git'))) {
             await fs.remove(join(tempPath, '.git'))
           }
@@ -89,7 +86,7 @@ cli
       process.exit(1)
     }
 
-    // 1. Step: Scan Skills and Descriptions
+    // 1. Step: Select Skills
     const skillEntries = (await fs.readdir(skillsPath, { withFileTypes: true }))
       .filter(entry => entry.isDirectory() && !entry.name.startsWith('.'))
     
@@ -153,9 +150,9 @@ cli
       process.exit(0)
     }
 
-    // 3. Step: Select Scope
-    let scope: 'project' | 'global' = 'project'
-    if (!options.yes) {
+    // 3. Step: Select Scope (Skip if --out is provided)
+    let scope: 'project' | 'global' | 'custom' = options.out ? 'custom' : 'project'
+    if (!options.out && !options.yes) {
       scope = await p.select({
         message: '第三步：选择安装范围 (Installation scope)',
         options: [
@@ -199,7 +196,9 @@ cli
       let exists = false
       for (const agent of selectedAgents) {
         let targetRoot = ''
-        if (scope === 'project') {
+        if (options.out) {
+          targetRoot = resolve(process.cwd(), options.out)
+        } else if (scope === 'project') {
           const hiddenFolderName = basename(dirname(agent.path))
           targetRoot = join(process.cwd(), hiddenFolderName, 'skills')
         } else {
@@ -235,7 +234,7 @@ cli
         `${pc.dim('Source:')}   ${isUrl ? source : 'Local'}`,
         `${pc.dim('Skills:')}   ${selectedSkills.join(', ')}`,
         `${pc.dim('Agents:')}   ${selectedAgents.map(a => a.name).join(', ')}`,
-        `${pc.dim('Scope:')}    ${scope}`,
+        `${pc.dim('Scope:')}    ${scope}${options.out ? ` (${options.out})` : ''}`,
         `${pc.dim('Method:')}   ${method}`,
         `${pc.dim('Strategy:')} ${strategy}`
       ]
@@ -255,24 +254,23 @@ cli
     }
 
     // 7. Execute Installation
+    // 修改 installSkills 的调用，支持 customRoot
     await installSkills({
       sourceDir: skillsPath,
       targetAgents: selectedAgents,
       selectedSkills,
-      scope,
+      scope: scope as any,
       method,
-      strategy
+      strategy,
+      // @ts-ignore
+      customRoot: options.out ? resolve(process.cwd(), options.out) : undefined
     })
 
-    // 清理临时目录
-    if (isTemp) {
-      await fs.remove(tempPath)
-    }
-
+    if (isTemp) await fs.remove(tempPath)
     p.outro(pc.green('安装完成！(Installation complete)'))
   })
 
 cli.help()
-cli.version('1.0.4')
+cli.version('1.0.5')
 
 cli.parse()
