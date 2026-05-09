@@ -125,9 +125,12 @@ cli
       process.exit(0)
     }
 
-    // 2. Step: Select Agents
+    // 2. Step: Select Agents (Skip if --out is provided)
     let selectedAgents: any[] = []
-    if (options.yes || options.agent === '*') {
+    if (options.out) {
+      // 如果指定了 --out，自动创建一个虚拟 Agent
+      selectedAgents = [{ name: 'Custom Path', path: resolve(process.cwd(), options.out) }]
+    } else if (options.yes || options.agent === '*') {
       selectedAgents = AGENTS
     } else if (options.agent) {
       const names = options.agent.split(',')
@@ -195,15 +198,7 @@ cli
     if (needsConflictCheck) {
       let exists = false
       for (const agent of selectedAgents) {
-        let targetRoot = ''
-        if (options.out) {
-          targetRoot = resolve(process.cwd(), options.out)
-        } else if (scope === 'project') {
-          const hiddenFolderName = basename(dirname(agent.path))
-          targetRoot = join(process.cwd(), hiddenFolderName, 'skills')
-        } else {
-          targetRoot = agent.path.replace(/^~/, os.homedir())
-        }
+        let targetRoot = agent.path // 此时如果 options.out 存在，path 已经是 resolve 后的路径了
         if (await fs.pathExists(targetRoot)) {
           exists = true
           break
@@ -233,8 +228,10 @@ cli
       const summary = [
         `${pc.dim('Source:')}   ${isUrl ? source : 'Local'}`,
         `${pc.dim('Skills:')}   ${selectedSkills.join(', ')}`,
-        `${pc.dim('Agents:')}   ${selectedAgents.map(a => a.name).join(', ')}`,
-        `${pc.dim('Scope:')}    ${scope}${options.out ? ` (${options.out})` : ''}`,
+        options.out 
+          ? `${pc.dim('Target:')}   ${selectedAgents[0].path}`
+          : `${pc.dim('Agents:')}   ${selectedAgents.map(a => a.name).join(', ')}`,
+        `${pc.dim('Scope:')}    ${scope}`,
         `${pc.dim('Method:')}   ${method}`,
         `${pc.dim('Strategy:')} ${strategy}`
       ]
@@ -254,7 +251,6 @@ cli
     }
 
     // 7. Execute Installation
-    // 修改 installSkills 的调用，支持 customRoot
     await installSkills({
       sourceDir: skillsPath,
       targetAgents: selectedAgents,
@@ -262,7 +258,6 @@ cli
       scope: scope as any,
       method,
       strategy,
-      // @ts-ignore
       customRoot: options.out ? resolve(process.cwd(), options.out) : undefined
     })
 
@@ -271,6 +266,6 @@ cli
   })
 
 cli.help()
-cli.version('1.0.5')
+cli.version('1.0.6')
 
 cli.parse()
