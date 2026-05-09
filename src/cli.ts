@@ -255,13 +255,16 @@ cli
     p.intro(`${pc.bgRed(pc.white(isGlobal ? ' xc-skills remove (Global) ' : ' xc-skills remove (Project) '))}`)
 
     const cwd = process.cwd()
-    const candidates: { name: string, path: string }[] = []
+    const candidates: { name: string, path: string, skills: string[] }[] = []
 
     if (isGlobal) {
       for (const agent of AGENTS) {
         const fullPath = agent.path.replace(/^~/, os.homedir())
         if (fs.existsSync(fullPath)) {
-          candidates.push({ name: agent.name, path: fullPath })
+          const skills = (await fs.readdir(fullPath, { withFileTypes: true }))
+            .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+            .map(e => e.name)
+          candidates.push({ name: agent.name, path: fullPath, skills })
         }
       }
     } else {
@@ -269,7 +272,10 @@ cli
       for (const dir of potentialDirs) {
         const skillsPath = join(cwd, dir, 'skills')
         if (fs.existsSync(skillsPath)) {
-          candidates.push({ name: dir, path: join(cwd, dir) })
+          const skills = (await fs.readdir(skillsPath, { withFileTypes: true }))
+            .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+            .map(e => e.name)
+          candidates.push({ name: dir, path: join(cwd, dir), skills })
         }
       }
     }
@@ -281,7 +287,11 @@ cli
 
     const targets = await p.multiselect({
       message: `选择要清除的${isGlobal ? '全局' : '项目'}目录 (Select to remove)`,
-      options: candidates.map(c => ({ value: c.path, label: c.name, hint: c.path.replace(os.homedir(), '~') })),
+      options: candidates.map(c => ({ 
+        value: c.path, 
+        label: c.name, 
+        hint: c.skills.length > 0 ? `Skills: ${c.skills.join(', ')}` : '(空目录)'
+      })),
       initialValues: candidates.map(c => c.path)
     }) as string[]
 
@@ -362,11 +372,10 @@ cli
         p.log.message('')
       }
     }
-
     p.outro('查询完毕！')
   })
 
 cli.help()
-cli.version('1.1.0')
+cli.version('1.1.1')
 
 cli.parse()
