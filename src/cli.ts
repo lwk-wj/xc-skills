@@ -258,7 +258,6 @@ cli
     const candidates: { name: string, path: string }[] = []
 
     if (isGlobal) {
-      // 扫描全局目录
       for (const agent of AGENTS) {
         const fullPath = agent.path.replace(/^~/, os.homedir())
         if (fs.existsSync(fullPath)) {
@@ -266,7 +265,6 @@ cli
         }
       }
     } else {
-      // 扫描当前项目目录
       const potentialDirs = ['.agent', '.trae', '.claude', '.codex']
       for (const dir of potentialDirs) {
         const skillsPath = join(cwd, dir, 'skills')
@@ -283,11 +281,7 @@ cli
 
     const targets = await p.multiselect({
       message: `选择要清除的${isGlobal ? '全局' : '项目'}目录 (Select to remove)`,
-      options: candidates.map(c => ({ 
-        value: c.path, 
-        label: c.name, 
-        hint: c.path.replace(os.homedir(), '~') 
-      })),
+      options: candidates.map(c => ({ value: c.path, label: c.name, hint: c.path.replace(os.homedir(), '~') })),
       initialValues: candidates.map(c => c.path)
     }) as string[]
 
@@ -297,7 +291,7 @@ cli
     }
 
     const confirm = await p.confirm({
-      message: `确认删除选中的 ${targets.length} 个目录及其所有技能？此操作不可逆！(Confirm deletion?)`,
+      message: `确认删除选中的 ${targets.length} 个目录及其所有技能？(Confirm deletion?)`,
       initialValue: false
     })
 
@@ -317,11 +311,62 @@ cli
         s.stop(pc.red(`删除 ${display} 失败: ${err.message}`))
       }
     }
-
     p.outro(pc.green('清理完成！'))
   })
 
+// --- List Command ---
+cli
+  .command('list', 'List installed skills')
+  .alias('ls')
+  .option('-g, --global', 'List global skills instead of project skills')
+  .action(async (options) => {
+    const isGlobal = options.global
+    p.intro(`${pc.bgBlue(pc.white(isGlobal ? ' xc-skills list (Global) ' : ' xc-skills list (Project) '))}`)
+
+    const cwd = process.cwd()
+    const groups: { name: string, path: string, skills: string[] }[] = []
+
+    if (isGlobal) {
+      for (const agent of AGENTS) {
+        const fullPath = agent.path.replace(/^~/, os.homedir())
+        if (fs.existsSync(fullPath)) {
+          const skills = (await fs.readdir(fullPath, { withFileTypes: true }))
+            .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+            .map(e => e.name)
+          groups.push({ name: agent.name, path: fullPath, skills })
+        }
+      }
+    } else {
+      const potentialDirs = ['.agent', '.trae', '.claude', '.codex']
+      for (const dir of potentialDirs) {
+        const skillsPath = join(cwd, dir, 'skills')
+        if (fs.existsSync(skillsPath)) {
+          const skills = (await fs.readdir(skillsPath, { withFileTypes: true }))
+            .filter(e => e.isDirectory() && !e.name.startsWith('.'))
+            .map(e => e.name)
+          groups.push({ name: dir, path: skillsPath, skills })
+        }
+      }
+    }
+
+    if (groups.length === 0) {
+      p.log.info('没有发现已安装的技能。')
+    } else {
+      for (const group of groups) {
+        p.log.message(`${pc.cyan(group.name)} ${pc.dim(`(${group.path.replace(os.homedir(), '~')})`)}`)
+        if (group.skills.length === 0) {
+          p.log.message(`  ${pc.dim('(无技能)')}`)
+        } else {
+          p.log.message(`  ${group.skills.join(', ')}`)
+        }
+        p.log.message('')
+      }
+    }
+
+    p.outro('查询完毕！')
+  })
+
 cli.help()
-cli.version('1.0.9')
+cli.version('1.1.0')
 
 cli.parse()

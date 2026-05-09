@@ -69,7 +69,19 @@ xc-skills add . --dir my-rules
 xc-skills add . --out ./my-debug-folder
 ```
 
-### 5. 清理项目技能目录
+### 5. 查看已安装的技能
+
+你可以列出当前项目或全局已安装的所有技能：
+
+```bash
+# 查看当前项目的技能
+xc-skills list
+
+# 查看全局已安装的技能
+xc-skills list -g
+```
+
+### 6. 清理项目技能目录
 
 如果你想删除当前项目中安装的所有技能目录（如 `.agent`, `.trae` 等），可以使用 `remove` 命令：
 
