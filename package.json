@@ -1,0 +1,29 @@
+{
+  "name": "xc-skills",
+  "version": "1.0.3",
+  "description": "Custom Agent Skills CLI for XC development",
+  "type": "module",
+  "bin": {
+    "xc-skills": "./dist/cli.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "tsup src/cli.ts --watch --format esm",
+    "build": "tsup src/cli.ts --format esm --clean --minify",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@clack/prompts": "^1.1.0",
+    "cac": "^6.7.14",
+    "fs-extra": "^11.3.0",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/fs-extra": "^11.0.4",
+    "@types/node": "^22.13.1",
+    "tsup": "^8.3.6",
+    "typescript": "^5.7.3"
+  }
+}
