@@ -125,10 +125,9 @@ cli
       process.exit(0)
     }
 
-    // 2. Step: Select Agents (Skip if --out is provided)
+    // 2. Step: Select Agents
     let selectedAgents: any[] = []
     if (options.out) {
-      // 如果指定了 --out，自动创建一个虚拟 Agent
       selectedAgents = [{ name: 'Custom Path', path: resolve(process.cwd(), options.out) }]
     } else if (options.yes || options.agent === '*') {
       selectedAgents = AGENTS
@@ -153,7 +152,7 @@ cli
       process.exit(0)
     }
 
-    // 3. Step: Select Scope (Skip if --out is provided)
+    // 3. Step: Select Scope
     let scope: 'project' | 'global' | 'custom' = options.out ? 'custom' : 'project'
     if (!options.out && !options.yes) {
       scope = await p.select({
@@ -198,7 +197,17 @@ cli
     if (needsConflictCheck) {
       let exists = false
       for (const agent of selectedAgents) {
-        let targetRoot = agent.path // 此时如果 options.out 存在，path 已经是 resolve 后的路径了
+        // 修正逻辑：必须根据当前的 scope 重新计算检测路径
+        let targetRoot = ''
+        if (options.out) {
+          targetRoot = resolve(process.cwd(), options.out)
+        } else if (scope === 'project') {
+          const hiddenFolderName = basename(dirname(agent.path))
+          targetRoot = join(process.cwd(), hiddenFolderName, 'skills')
+        } else {
+          targetRoot = agent.path.replace(/^~/, os.homedir())
+        }
+        
         if (await fs.pathExists(targetRoot)) {
           exists = true
           break
@@ -266,6 +275,6 @@ cli
   })
 
 cli.help()
-cli.version('1.0.6')
+cli.version('1.0.7')
 
 cli.parse()
