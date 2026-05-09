@@ -1,6 +1,6 @@
 {
   "name": "xc-skills",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Custom Agent Skills CLI for XC development",
   "type": "module",
   "bin": {
@@ -17,12 +17,15 @@
   "dependencies": {
     "@clack/prompts": "^1.1.0",
     "cac": "^6.7.14",
+    "degit": "^2.8.4",
     "fs-extra": "^11.3.0",
     "picocolors": "^1.1.1"
   },
   "devDependencies": {
+    "@types/degit": "^2.8.6",
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^22.13.1",
+    "degit": "^2.8.4",
     "tsup": "^8.3.6",
     "typescript": "^5.7.3"
   }
