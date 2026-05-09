@@ -69,7 +69,18 @@ xc-skills add . --dir my-rules
 xc-skills add . --out ./my-debug-folder
 ```
 
-### 5. 参数化运行
+### 5. 清理项目技能目录
+
+如果你想删除当前项目中安装的所有技能目录（如 `.agent`, `.trae` 等），可以使用 `remove` 命令：
+
+```bash
+xc-skills remove
+# 或者使用别名
+xc-skills cleanup
+xc-skills rm
+```
+
+### 6. 参数化运行
 
 ```bash
 # 自动安装所有技能到 Antigravity（跳过交互）

@@ -28,6 +28,7 @@ function getSkillDescription(skillPath: string): string {
   return ''
 }
 
+// --- Add Command ---
 cli
   .command('add <source>', 'Add skills from a local directory or GitHub URL')
   .option('-s, --skill <skills>', 'Specific skills to install')
@@ -42,13 +43,11 @@ cli
     let isTemp = false
     const tempPath = join(os.tmpdir(), `xc-skills-${Date.now()}`)
 
-    // 检测是否为 URL
     const isUrl = source.startsWith('http') || source.startsWith('git@') || (source.includes('/') && !fs.existsSync(resolve(process.cwd(), source)))
 
     if (isUrl) {
       const s = p.spinner()
       s.start(`正在尝试下载技能库: ${source}`)
-      
       let success = false
       try {
         const emitter = degit(source, { cache: false, force: true, verbose: false })
@@ -69,7 +68,6 @@ cli
           process.exit(1)
         }
       }
-
       if (success) {
         sourceDir = tempPath
         isTemp = true
@@ -79,14 +77,12 @@ cli
     }
 
     const skillsPath = join(sourceDir, options.dir)
-    
     if (!fs.existsSync(skillsPath)) {
       p.log.error(`找不到技能目录: ${skillsPath}`)
       if (isTemp) await fs.remove(tempPath)
       process.exit(1)
     }
 
-    // 1. Step: Select Skills
     const skillEntries = (await fs.readdir(skillsPath, { withFileTypes: true }))
       .filter(entry => entry.isDirectory() && !entry.name.startsWith('.'))
     
@@ -110,11 +106,7 @@ cli
     } else {
       selectedSkills = await p.multiselect({
         message: '第一步：选择要安装的技能 (Select skills)',
-        options: availableSkills.map(s => ({ 
-          value: s.name, 
-          label: s.name, 
-          hint: s.description 
-        })),
+        options: availableSkills.map(s => ({ value: s.name, label: s.name, hint: s.description })),
         initialValues: [availableSkills[0].name]
       }) as string[]
     }
@@ -125,7 +117,6 @@ cli
       process.exit(0)
     }
 
-    // 2. Step: Select Agents
     let selectedAgents: any[] = []
     if (options.out) {
       selectedAgents = [{ name: 'Custom Path', path: resolve(process.cwd(), options.out) }]
@@ -137,11 +128,7 @@ cli
     } else {
       selectedAgents = await p.multiselect({
         message: '第二步：选择目标开发工具 (Select agents)',
-        options: AGENTS.map(a => ({ 
-          value: a, 
-          label: a.name, 
-          hint: a.path.replace(os.homedir(), '~') 
-        })),
+        options: AGENTS.map(a => ({ value: a, label: a.name, hint: a.path.replace(os.homedir(), '~') })),
         initialValues: [AGENTS[0]]
       }) as any[]
     }
@@ -152,7 +139,6 @@ cli
       process.exit(0)
     }
 
-    // 3. Step: Select Scope
     let scope: 'project' | 'global' | 'custom' = options.out ? 'custom' : 'project'
     if (!options.out && !options.yes) {
       scope = await p.select({
@@ -170,7 +156,6 @@ cli
       process.exit(0)
     }
 
-    // 4. Step: Select Method
     let method: 'symlink' | 'copy' = 'symlink'
     if (isTemp) {
       method = 'copy'
@@ -190,14 +175,11 @@ cli
       process.exit(0)
     }
 
-    // 检查冲突并选择策略
     let strategy: 'merge' | 'overwrite' = 'merge'
     const needsConflictCheck = !options.yes
-
     if (needsConflictCheck) {
       let exists = false
       for (const agent of selectedAgents) {
-        // 修正逻辑：必须根据当前的 scope 重新计算检测路径
         let targetRoot = ''
         if (options.out) {
           targetRoot = resolve(process.cwd(), options.out)
@@ -207,13 +189,11 @@ cli
         } else {
           targetRoot = agent.path.replace(/^~/, os.homedir())
         }
-        
         if (await fs.pathExists(targetRoot)) {
           exists = true
           break
         }
       }
-
       if (exists) {
         strategy = await p.select({
           message: '检测到目标目录已存在，如何处理？(Handle conflicts)',
@@ -231,27 +211,18 @@ cli
       process.exit(0)
     }
 
-    // 5. Step: Installation Summary
     if (!options.yes) {
       p.log.message(`${pc.cyan('安装综述 (Installation Summary)')}`)
       const summary = [
         `${pc.dim('Source:')}   ${isUrl ? source : 'Local'}`,
         `${pc.dim('Skills:')}   ${selectedSkills.join(', ')}`,
-        options.out 
-          ? `${pc.dim('Target:')}   ${selectedAgents[0].path}`
-          : `${pc.dim('Agents:')}   ${selectedAgents.map(a => a.name).join(', ')}`,
+        options.out ? `${pc.dim('Target:')}   ${selectedAgents[0].path}` : `${pc.dim('Agents:')}   ${selectedAgents.map(a => a.name).join(', ')}`,
         `${pc.dim('Scope:')}    ${scope}`,
         `${pc.dim('Method:')}   ${method}`,
         `${pc.dim('Strategy:')} ${strategy}`
       ]
       summary.forEach(line => p.log.message(`  ${line}`))
-      
-      // 6. Step: Confirm Installation
-      const confirm = await p.confirm({
-        message: '确认安装？(Proceed with installation?)',
-        initialValue: true
-      })
-
+      const confirm = await p.confirm({ message: '确认安装？(Proceed with installation?)', initialValue: true })
       if (p.isCancel(confirm) || !confirm) {
         if (isTemp) await fs.remove(tempPath)
         p.cancel('安装已取消')
@@ -259,7 +230,6 @@ cli
       }
     }
 
-    // 7. Execute Installation
     await installSkills({
       sourceDir: skillsPath,
       targetAgents: selectedAgents,
@@ -274,7 +244,68 @@ cli
     p.outro(pc.green('安装完成！(Installation complete)'))
   })
 
+// --- Remove Command ---
+cli
+  .command('remove', 'Remove installed skills from the current project')
+  .alias('cleanup')
+  .alias('rm')
+  .action(async () => {
+    p.intro(`${pc.bgRed(pc.white(' xc-skills remove '))}`)
+
+    const cwd = process.cwd()
+    const potentialDirs = ['.agent', '.trae', '.claude', '.codex']
+    const foundDirs: string[] = []
+
+    for (const dir of potentialDirs) {
+      const skillsPath = join(cwd, dir, 'skills')
+      if (fs.existsSync(skillsPath)) {
+        foundDirs.push(dir)
+      }
+    }
+
+    if (foundDirs.length === 0) {
+      p.log.info('在当前项目中没有发现已安装的技能目录。')
+      process.exit(0)
+    }
+
+    const targets = await p.multiselect({
+      message: '选择要清除的目录 (Select directories to remove)',
+      options: foundDirs.map(dir => ({ value: dir, label: `${dir}/skills` })),
+      initialValues: foundDirs
+    }) as string[]
+
+    if (p.isCancel(targets) || targets.length === 0) {
+      p.cancel('操作已取消')
+      process.exit(0)
+    }
+
+    const confirm = await p.confirm({
+      message: `确认删除选中的 ${targets.length} 个目录及其所有技能？(Confirm deletion?)`,
+      initialValue: false
+    })
+
+    if (p.isCancel(confirm) || !confirm) {
+      p.cancel('操作已取消')
+      process.exit(0)
+    }
+
+    const s = p.spinner()
+    for (const dir of targets) {
+      s.start(`正在删除 ${dir}...`)
+      try {
+        // 我们只删除内部的 skills 文件夹，或者如果隐藏文件夹内没有其他内容，则删除整个隐藏文件夹
+        const targetPath = join(cwd, dir)
+        await fs.remove(targetPath)
+        s.stop(`已删除: ${dir}`)
+      } catch (err: any) {
+        s.stop(pc.red(`删除 ${dir} 失败: ${err.message}`))
+      }
+    }
+
+    p.outro(pc.green('清理完成！'))
+  })
+
 cli.help()
-cli.version('1.0.7')
+cli.version('1.0.8')
 
 cli.parse()
