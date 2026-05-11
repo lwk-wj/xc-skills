@@ -51,7 +51,7 @@ npm run build
 将编译好的包发布到 NPM 注册表。
 
 ```bash
-npm publish
+npm publish --access public
 ```
 
 ### 6. 🖇️ 同步到远程仓库
