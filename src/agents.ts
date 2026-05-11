@@ -10,7 +10,7 @@ export interface Agent {
 export const AGENTS: Agent[] = [
   {
     name: 'Antigravity',
-    path: join(os.homedir(), '.agent/skills'),
+    path: join(os.homedir(), '.agents/skills'),
     description: 'Custom AI agent for XC development'
   },
   {
