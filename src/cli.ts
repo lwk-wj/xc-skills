@@ -4,6 +4,8 @@ import { addCommand } from './commands/add.js'
 import { removeCommand } from './commands/remove.js'
 import { listCommand } from './commands/list.js'
 import { updateCommand } from './commands/update.js'
+import { configCommand } from './commands/config.js'
+import { syncCommand } from './commands/sync.js'
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -45,6 +47,18 @@ cli
   .option('-d, --dir <dir>', 'The directory containing local skills', { default: 'skills' })
   .option('-b, --branch <branch>', 'The target branch', { default: 'main' })
   .action(updateCommand)
+
+// --- Config Command ---
+cli
+  .command('config', 'Configure global settings')
+  .option('-r, --repo <path>', 'Set the central skills repository path')
+  .action(configCommand)
+
+// --- Sync Command ---
+cli
+  .command('sync', 'Sync evolved skills (with PENDING_SYNC.md) to central repository')
+  .option('-d, --dir <dir>', 'The directory containing local skills', { default: '.agents/skills' })
+  .action(syncCommand)
 
 cli.help()
 cli.version(pkg.version)

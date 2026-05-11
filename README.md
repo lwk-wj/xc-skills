@@ -9,13 +9,8 @@
 - **项目级安装 (Project Scope)**：支持将技能安装到当前项目的 `.agent/skills`, `.trae/skills` 等隐藏目录下。
 - **技能描述预览**：在安装选择界面，自动解析并显示每个技能的详细功能描述。
 - **远程同步更新 (Update)**：支持将本地开发的技能一键同步/推送到指定的远程 Git 仓库。
-- **深度交互流程**：
-  1. **Select Skills**：勾选技能（带描述预览）。
-  2. **Select Agents**：选择要同步的目标开发工具。
-  3. **Scope Choice**：决定是全局安装还是项目内安装。
-  4. **Method Choice**：选择软链接或物理拷贝。
-  5. **Summary**：安装前的详细综述。
-  6. **Confirmation**：二次确认。
+- **跨项目自进化同步 (Sync)** 🌟：支持将业务项目中的技能改进一键同步回中央技能仓库。
+- **深度交互流程**：包含技能选择、Agent 选择、安装范围、物理/软链选择等完整生命周期管理。
 
 ## 📦 安装
 
@@ -29,6 +24,14 @@ npm install -g xc-skills
 
 ```bash
 pnpm dlx xc-skills add .
+```
+
+## ⚙️ 配置中央仓库
+
+在使用自进化同步功能前，需要指定你的本地中央技能仓库路径：
+
+```bash
+xc-skills config --repo /Users/xc/Desktop/XcSkill/skills
 ```
 
 ## 🚀 使用指南
@@ -57,23 +60,27 @@ xc-skills add https://e.coding.net/your-team/skills.git
 
 如果你本地开发了新技能，想要推送到团队公共仓库。
 
-**在技能文件夹（如 `sks/`）内直接运行：**
-
 ```bash
 # 自动扫描当前目录下的子文件夹作为技能
 xc-skills update
 ```
 
-**或者指定目录和远程仓库地址：**
+### 4. 同步进化到中央仓库 (Sync) 🌟
+
+当你（或 AI）在业务项目里改进了某个技能（生成了 `PENDING_SYNC.md`）后，使用此命令将变更同步回本地中央仓库。
 
 ```bash
-# 指定本地目录
-xc-skills update ./my-dev-skills --remote https://github.com/org/repo.git
+# 在业务项目根目录下运行
+xc-skills sync
 ```
 
-### 4. 查看已安装的技能
+该命令会自动：
+- 在中央仓库执行快照备份 (Snapshot)
+- 同步 `SKILL.md` 和 `EVOLUTION.md`
+- 自动触发中央仓库索引更新
+- 清理本地同步标记
 
-你可以列出当前项目或全局已安装的所有技能：
+### 5. 查看已安装的技能
 
 ```bash
 # 查看当前项目的技能
@@ -83,19 +90,20 @@ xc-skills list
 xc-skills list -g
 ```
 
-### 5. 清理项目技能目录
-
-如果你想删除当前项目中安装的所有技能目录（如 `.agent`, `.trae` 等），可以使用 `remove` 命令：
+### 6. 清理项目技能目录
 
 ```bash
 xc-skills remove
 # 或者使用别名
 xc-skills cleanup
 xc-skills rm
-
-# 清理全局目录下的技能
-xc-skills remove --global
 ```
+
+## 🔄 自进化工作流
+
+1. **就地进化**：AI 在业务项目（如 `silk-all-backend`）中发现技能缺陷，直接修改 `.agents/skills/xxx/SKILL.md` 并标记待同步。
+2. **本地验证**：在业务项目中验证改进是否有效。
+3. **一键归档**：运行 `xc-skills sync`，将改动同步到中央仓库并自动生成版本历史快照。
 
 ## 🛠 命令参数
 
@@ -108,11 +116,15 @@ xc-skills remove --global
 | `-o, --out <path>` | 指定输出的目标目录路径 |
 | `-y, --yes` | 跳过所有确认和交互步骤 |
 
-### `update` 指令参数
+### `config` 指令参数
 | 选项 | 描述 |
 | --- | --- |
-| `-r, --remote <url>` | 目标远程仓库的 Git 地址 |
-| `-b, --branch <name>` | 目标仓库的分支（默认为 `main`） |
+| `-r, --repo <path>` | 设置本地中央技能仓库的路径 |
+
+### `sync` 指令参数
+| 选项 | 描述 |
+| --- | --- |
+| `-d, --dir <dir>` | 业务项目中存放技能的目录（默认为 `.agents/skills`） |
 
 ## 📄 License
 
