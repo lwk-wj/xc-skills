@@ -8,7 +8,7 @@
 - **全平台远程安装**：支持从 GitHub, GitLab 以及通用 Git 平台（如 **Coding.net**, 企业级私有仓库）下载并安装技能。
 - **项目级安装 (Project Scope)**：支持将技能安装到当前项目的 `.agent/skills`, `.trae/skills` 等隐藏目录下。
 - **技能描述预览**：在安装选择界面，自动解析并显示每个技能的详细功能描述。
-- **自定义目录扫描**：支持通过 `--dir` 选项指定本地或远程仓库中的技能存放路径。
+- **远程同步更新 (Update)**：支持将本地开发的技能一键同步/推送到指定的远程 Git 仓库。
 - **深度交互流程**：
   1. **Select Skills**：勾选技能（带描述预览）。
   2. **Select Agents**：选择要同步的目标开发工具。
@@ -53,23 +53,25 @@ xc-skills add https://github.com/vuejs-ai/skills.git
 xc-skills add https://e.coding.net/your-team/skills.git
 ```
 
-### 3. 自定义技能目录
+### 3. 一键同步到远程仓库 (Update)
 
-如果技能不在 `skills/` 目录下（例如在 `my-rules/` 目录），可以使用 `--dir` 参数：
+如果你本地开发了新技能，想要推送到团队公共仓库。
 
-```bash
-xc-skills add . --dir my-rules
-```
-
-### 4. 指定输出路径
-
-如果你想把技能安装到一个特定的文件夹（而不是默认的 Agent 路径或 `.agent/skills`），可以使用 `--out` 参数：
+**在技能文件夹（如 `sks/`）内直接运行：**
 
 ```bash
-xc-skills add . --out ./my-debug-folder
+# 自动扫描当前目录下的子文件夹作为技能
+xc-skills update
 ```
 
-### 5. 查看已安装的技能
+**或者指定目录和远程仓库地址：**
+
+```bash
+# 指定本地目录
+xc-skills update ./my-dev-skills --remote https://github.com/org/repo.git
+```
+
+### 4. 查看已安装的技能
 
 你可以列出当前项目或全局已安装的所有技能：
 
@@ -81,7 +83,7 @@ xc-skills list
 xc-skills list -g
 ```
 
-### 6. 清理项目技能目录
+### 5. 清理项目技能目录
 
 如果你想删除当前项目中安装的所有技能目录（如 `.agent`, `.trae` 等），可以使用 `remove` 命令：
 
@@ -95,24 +97,22 @@ xc-skills rm
 xc-skills remove --global
 ```
 
-### 6. 参数化运行
+## 🛠 命令参数
 
-```bash
-# 自动安装所有技能到 Antigravity（跳过交互）
-xc-skills add . --yes --agent Antigravity --skill *
-```
-
-## 🛠 命令选项
-
+### `add` 指令参数
 | 选项 | 描述 |
 | --- | --- |
 | `-s, --skill <names>` | 指定要安装的技能名称（逗号分隔，或用 `*` 表示全部） |
 | `-a, --agent <names>` | 指定目标 Agent 名称（逗号分隔，或用 `*` 表示全部） |
 | `-d, --dir <dir>` | 指定源目录中技能存放的目录名（默认为 `skills`） |
 | `-o, --out <path>` | 指定输出的目标目录路径 |
-| `-y, --yes` | 跳过所有确认和交互步骤，使用默认值 |
-| `-v, --version` | 查看版本号 |
-| `-h, --help` | 查看帮助信息 |
+| `-y, --yes` | 跳过所有确认和交互步骤 |
+
+### `update` 指令参数
+| 选项 | 描述 |
+| --- | --- |
+| `-r, --remote <url>` | 目标远程仓库的 Git 地址 |
+| `-b, --branch <name>` | 目标仓库的分支（默认为 `main`） |
 
 ## 📄 License
 
