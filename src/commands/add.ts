@@ -206,7 +206,7 @@ export async function addCommand(source: string, options: AddOptions) {
     summary.forEach(line => p.log.message(`  ${line}`))
     
     if (method === 'symlink') {
-      p.log.warn(pc.yellow('⚠️  警告：软链接模式下，AI 的进化操作将直接修改中央仓库，且可能跳过同步快照逻辑。建议在生产项目中使用 Copy 模式。'))
+      p.log.warn(pc.yellow('⚠️  提示：软链接模式下，任何修改都会实时同步到中央仓库。进化完成后请务必运行 `xc-skills sync` 进行版本存证。'))
     }
 
     const confirm = await p.confirm({ message: '确认安装？(Proceed with installation?)', initialValue: true })

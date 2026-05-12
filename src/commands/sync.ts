@@ -1,5 +1,5 @@
 import fs from 'fs-extra'
-import { join, basename } from 'node:path'
+import { join, basename, resolve } from 'node:path'
 import * as p from '@clack/prompts'
 import pc from 'picocolors'
 import { getConfig } from './config.js'
@@ -46,7 +46,6 @@ export async function syncCommand(options: { dir: string }) {
   scan(process.cwd())
   s_search.stop('扫描完成')
 
-  // 去重
   const uniquePendingSkills = Array.from(new Map(pendingSkills.map(s => [s.name, s])).values())
 
   if (uniquePendingSkills.length === 0) {
@@ -55,10 +54,13 @@ export async function syncCommand(options: { dir: string }) {
     return
   }
 
-  // 展示汇总清单并一次性确认
   p.log.message(`${pc.cyan('待同步清单 (Pending Sync List):')}`)
   uniquePendingSkills.forEach(s => {
-    p.log.message(`  ${pc.green('●')} ${pc.bold(s.name)} ${pc.dim('->')} ${pc.dim(s.path.replace(process.cwd(), '.'))}`)
+    // 检查是否为软链接
+    const isSymlink = fs.lstatSync(s.path).isSymbolicLink() || 
+                     (fs.existsSync(join(s.path, 'SKILL.md')) && fs.lstatSync(join(s.path, 'SKILL.md')).isSymbolicLink());
+    
+    p.log.message(`  ${pc.green('●')} ${pc.bold(s.name)} ${isSymlink ? pc.yellow('[软链]') : pc.blue('[拷贝]')} ${pc.dim(s.path.replace(process.cwd(), '.'))}`)
   })
 
   const confirmAll = await p.confirm({
@@ -71,10 +73,6 @@ export async function syncCommand(options: { dir: string }) {
     return
   }
 
-  /**
-   * 从 EVOLUTION.md 中解析最新版本号
-   * 匹配格式: ## v1.2.3 或 ## v1.2.3 — 2026-05-12
-   */
   function parseLatestVersion(evolutionPath: string): string | null {
     if (!fs.existsSync(evolutionPath)) return null
     const content = fs.readFileSync(evolutionPath, 'utf-8')
@@ -82,18 +80,13 @@ export async function syncCommand(options: { dir: string }) {
     return match ? match[1] : null
   }
 
-  /**
-   * 在 EVOLUTION.md 的最新条目标题后追加 commit hash
-   * 如: "## v1.4.1 — 2026-05-12" -> "## v1.4.1 — 2026-05-12 `abc1234`"
-   */
   function appendHashToEvolution(evolutionPath: string, hash: string) {
     if (!fs.existsSync(evolutionPath)) return
     let content = fs.readFileSync(evolutionPath, 'utf-8')
-    // 找到第一个 ## 标题行，追加 hash（如果尚未存在）
     content = content.replace(
       /^(## v[\d.]+ — [\d-]+)(.*?)$/m,
       (match, prefix, rest) => {
-        if (rest.includes('`')) return match // 已有 hash，跳过
+        if (rest.includes('`')) return match
         return `${prefix} \`${hash}\``
       }
     )
@@ -109,21 +102,28 @@ export async function syncCommand(options: { dir: string }) {
     const sourceDir = skill.path
     const targetDir = join(repoPath, 'skills', skill.name)
 
-    try {
-      // A. 确保目标目录存在
-      await fs.ensureDir(targetDir)
+    // 判定是否需要物理拷贝 (如果 SKILL.md 是软链，则认为不需要拷贝)
+    const skillFile = join(sourceDir, 'SKILL.md')
+    const needsCopy = fs.existsSync(skillFile) && !fs.lstatSync(skillFile).isSymbolicLink() && !fs.lstatSync(sourceDir).isSymbolicLink()
 
-      // B. 复制核心文件
-      const filesToSync = ['SKILL.md', 'EVOLUTION.md']
-      for (const file of filesToSync) {
-        const src = join(sourceDir, file)
-        const dest = join(targetDir, file)
-        if (await fs.pathExists(src)) {
-          await fs.copy(src, dest)
+    try {
+      if (needsCopy) {
+        await fs.ensureDir(targetDir)
+        const filesToSync = ['SKILL.md', 'EVOLUTION.md']
+        for (const file of filesToSync) {
+          const src = join(sourceDir, file)
+          const dest = join(targetDir, file)
+          if (await fs.pathExists(src)) {
+            await fs.copy(src, dest)
+          }
         }
+      } else {
+        p.log.message(pc.dim(`  └─ [${skill.name}] 检测到软链接，跳过物理拷贝`))
       }
 
-      // C. 在中央仓库执行 Git Commit
+      // --- 以下步骤无论软链还是拷贝都要执行 ---
+      
+      // 1. Git Commit
       const version = parseLatestVersion(join(targetDir, 'EVOLUTION.md'))
       const commitMsg = `feat(${skill.name}): evolve to ${version || 'latest'}`
 
@@ -131,7 +131,6 @@ export async function syncCommand(options: { dir: string }) {
         execSync('git add .', { cwd: repoPath, stdio: 'pipe' })
         execSync(`git commit -m "${commitMsg}"`, { cwd: repoPath, stdio: 'pipe' })
       } catch (e: any) {
-        // 如果没有变更（内容完全相同），git commit 会报错，跳过即可
         const status = execSync('git status --porcelain', { cwd: repoPath }).toString()
         if (!status.trim()) {
           s.stop(pc.yellow(`${skill.name}: 内容无变化，已跳过`))
@@ -140,34 +139,30 @@ export async function syncCommand(options: { dir: string }) {
         }
       }
 
-      // D. 获取 commit hash
+      // 2. 获取 Hash 并写回
       const hash = execSync('git rev-parse --short HEAD', { cwd: repoPath }).toString().trim()
-
-      // E. 将 hash 写回 EVOLUTION.md
       appendHashToEvolution(join(targetDir, 'EVOLUTION.md'), hash)
 
-      // F. 修正提交（追加 hash 信息）
+      // 3. 修正提交
       try {
         execSync('git add .', { cwd: repoPath, stdio: 'pipe' })
         execSync('git commit --amend --no-edit', { cwd: repoPath, stdio: 'pipe' })
       } catch (e) {}
 
-      // G. 打 Git Tag
+      // 4. 打 Tag
       if (version) {
         const tagName = `${skill.name}@${version}`
         try {
           execSync(`git tag ${tagName}`, { cwd: repoPath, stdio: 'pipe' })
-        } catch (e) {
-          // tag 已存在时忽略
-        }
+        } catch (e) {}
       }
 
-      // H. 更新索引
+      // 5. 更新索引
       try {
         execSync(`pnpm start index`, { cwd: repoPath, stdio: 'pipe' })
       } catch (e) {}
 
-      // I. 清理本地标记
+      // 6. 清理本地标记
       await fs.remove(join(sourceDir, 'PENDING_SYNC.md'))
 
       s.stop(`${pc.green('✔')} ${skill.name} ${version ? pc.dim(`${version}`) : ''} ${pc.dim(`[${hash}]`)}`)
