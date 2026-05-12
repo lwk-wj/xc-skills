@@ -1,17 +1,46 @@
 import fs from 'fs-extra'
 import { join, basename, resolve } from 'node:path'
+import os from 'node:os'
 import * as p from '@clack/prompts'
 import pc from 'picocolors'
 import { getConfig } from './config.js'
 import { execSync } from 'node:child_process'
 
-export async function syncCommand(options: { dir: string }) {
+export async function syncCommand(options: { dir: string, repo?: string }) {
   p.intro(`${pc.bgGreen(pc.black(' xc-skills sync '))}`)
 
   const config = await getConfig()
-  if (!config.repoPath) {
-    p.log.error('未配置中央仓库路径。请先运行: xc-skills config --repo <path>')
+  let repoPath = options.repo || config.repoPath
+  let isTempRepo = false
+  const tempRepoPath = join(os.tmpdir(), `xc-skills-sync-repo-${Date.now()}`)
+
+  if (!repoPath) {
+    p.log.error('未配置中央仓库路径。请使用 --repo <path/url> 或运行: xc-skills config --repo <path>')
     process.exit(1)
+  }
+
+  // 检测是否为远程 URL
+  const isRemote = repoPath.startsWith('http') || repoPath.startsWith('git@')
+
+  if (isRemote) {
+    const s_clone = p.spinner()
+    s_clone.start(`正在准备远程同步环境: ${pc.cyan(repoPath)}`)
+    try {
+      execSync(`git clone --depth 1 ${repoPath} ${tempRepoPath}`, { stdio: 'ignore' })
+      repoPath = tempRepoPath
+      isTempRepo = true
+      s_clone.stop('远程环境准备就绪')
+    } catch (err: any) {
+      s_clone.stop(pc.red('远程仓库拉取失败'))
+      p.log.error(err.message)
+      process.exit(1)
+    }
+  } else {
+    repoPath = resolve(process.cwd(), repoPath)
+    if (!fs.existsSync(repoPath)) {
+      p.log.error(`本地目标仓库路径不存在: ${repoPath}`)
+      process.exit(1)
+    }
   }
 
   // 1. 递归搜索所有 PENDING_SYNC.md
@@ -50,25 +79,26 @@ export async function syncCommand(options: { dir: string }) {
 
   if (uniquePendingSkills.length === 0) {
     p.log.info('没有发现待同步的进化技能（未找到 PENDING_SYNC.md）。')
+    if (isTempRepo) await fs.remove(tempRepoPath)
     p.outro('完成')
     return
   }
 
   p.log.message(`${pc.cyan('待同步清单 (Pending Sync List):')}`)
   uniquePendingSkills.forEach(s => {
-    // 检查是否为软链接
-    const isSymlink = fs.lstatSync(s.path).isSymbolicLink() || 
-                     (fs.existsSync(join(s.path, 'SKILL.md')) && fs.lstatSync(join(s.path, 'SKILL.md')).isSymbolicLink());
+    const isSymlink = fs.existsSync(s.path) && (fs.lstatSync(s.path).isSymbolicLink() || 
+                     (fs.existsSync(join(s.path, 'SKILL.md')) && fs.lstatSync(join(s.path, 'SKILL.md')).isSymbolicLink()));
     
     p.log.message(`  ${pc.green('●')} ${pc.bold(s.name)} ${isSymlink ? pc.yellow('[软链]') : pc.blue('[拷贝]')} ${pc.dim(s.path.replace(process.cwd(), '.'))}`)
   })
 
   const confirmAll = await p.confirm({
-    message: `确认同步以上 ${uniquePendingSkills.length} 个技能到中央仓库？`,
+    message: `确认同步以上 ${uniquePendingSkills.length} 个技能到目标仓库？`,
     initialValue: true,
   })
 
   if (p.isCancel(confirmAll) || !confirmAll) {
+    if (isTempRepo) await fs.remove(tempRepoPath)
     p.cancel('已取消同步')
     return
   }
@@ -94,15 +124,14 @@ export async function syncCommand(options: { dir: string }) {
   }
 
   const s = p.spinner()
-  const repoPath = config.repoPath
+  const finalRepoPath = repoPath!
 
   for (const skill of uniquePendingSkills) {
     s.start(`正在同步: ${skill.name}`)
 
     const sourceDir = skill.path
-    const targetDir = join(repoPath, 'skills', skill.name)
+    const targetDir = join(finalRepoPath, 'skills', skill.name)
 
-    // 判定是否需要物理拷贝 (如果 SKILL.md 是软链，则认为不需要拷贝)
     const skillFile = join(sourceDir, 'SKILL.md')
     const needsCopy = fs.existsSync(skillFile) && !fs.lstatSync(skillFile).isSymbolicLink() && !fs.lstatSync(sourceDir).isSymbolicLink()
 
@@ -117,21 +146,17 @@ export async function syncCommand(options: { dir: string }) {
             await fs.copy(src, dest)
           }
         }
-      } else {
-        p.log.message(pc.dim(`  └─ [${skill.name}] 检测到软链接，跳过物理拷贝`))
       }
 
-      // --- 以下步骤无论软链还是拷贝都要执行 ---
-      
       // 1. Git Commit
       const version = parseLatestVersion(join(targetDir, 'EVOLUTION.md'))
       const commitMsg = `feat(${skill.name}): evolve to ${version || 'latest'}`
 
       try {
-        execSync('git add .', { cwd: repoPath, stdio: 'pipe' })
-        execSync(`git commit -m "${commitMsg}"`, { cwd: repoPath, stdio: 'pipe' })
+        execSync('git add .', { cwd: finalRepoPath, stdio: 'pipe' })
+        execSync(`git commit -m "${commitMsg}"`, { cwd: finalRepoPath, stdio: 'pipe' })
       } catch (e: any) {
-        const status = execSync('git status --porcelain', { cwd: repoPath }).toString()
+        const status = execSync('git status --porcelain', { cwd: finalRepoPath }).toString()
         if (!status.trim()) {
           s.stop(pc.yellow(`${skill.name}: 内容无变化，已跳过`))
           await fs.remove(join(sourceDir, 'PENDING_SYNC.md'))
@@ -140,26 +165,26 @@ export async function syncCommand(options: { dir: string }) {
       }
 
       // 2. 获取 Hash 并写回
-      const hash = execSync('git rev-parse --short HEAD', { cwd: repoPath }).toString().trim()
+      const hash = execSync('git rev-parse --short HEAD', { cwd: finalRepoPath }).toString().trim()
       appendHashToEvolution(join(targetDir, 'EVOLUTION.md'), hash)
 
       // 3. 修正提交
       try {
-        execSync('git add .', { cwd: repoPath, stdio: 'pipe' })
-        execSync('git commit --amend --no-edit', { cwd: repoPath, stdio: 'pipe' })
+        execSync('git add .', { cwd: finalRepoPath, stdio: 'pipe' })
+        execSync('git commit --amend --no-edit', { cwd: finalRepoPath, stdio: 'pipe' })
       } catch (e) {}
 
       // 4. 打 Tag
       if (version) {
         const tagName = `${skill.name}@${version}`
         try {
-          execSync(`git tag ${tagName}`, { cwd: repoPath, stdio: 'pipe' })
+          execSync(`git tag ${tagName}`, { cwd: finalRepoPath, stdio: 'pipe' })
         } catch (e) {}
       }
 
       // 5. 更新索引
       try {
-        execSync(`pnpm start index`, { cwd: repoPath, stdio: 'pipe' })
+        execSync(`pnpm start index`, { cwd: finalRepoPath, stdio: 'pipe' })
       } catch (e) {}
 
       // 6. 清理本地标记
@@ -174,14 +199,21 @@ export async function syncCommand(options: { dir: string }) {
 
   // --- 最后的 Push 操作 ---
   const s_push = p.spinner()
-  s_push.start('正在推送到远程中央仓库...')
+  s_push.start('正在推送到远程目标仓库...')
   try {
-    // 使用 --follow-tags 确保新生成的版本 Tag 也能推上去
-    execSync('git push --follow-tags', { cwd: repoPath, stdio: 'pipe' })
-    s_push.stop(pc.green('🚀 已成功同步并推送至远程仓库！'))
+    execSync('git push --follow-tags', { cwd: finalRepoPath, stdio: 'pipe' })
+    s_push.stop(pc.green('🚀 已成功同步并推送至仓库！'))
   } catch (e: any) {
-    s_push.stop(pc.yellow('⚠️  本地同步成功，但推送远程失败（可能是网络问题或远程有更新）。'))
-    p.log.warn('你可以稍后在中央仓库手动执行 git push。')
+    if (isRemote) {
+      s_push.stop(pc.red('❌ 远程推送失败。'))
+    } else {
+      s_push.stop(pc.yellow('⚠️  本地同步成功，但推送远程失败。'))
+    }
+  }
+
+  // 如果是临时目录，清理掉
+  if (isTempRepo) {
+    await fs.remove(tempRepoPath)
   }
 
   p.outro(pc.green('全部同步任务已完成！'))

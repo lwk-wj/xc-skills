@@ -60,6 +60,7 @@ cli
 cli
   .command('sync', 'Sync evolved skills back to the central repository')
   .option('-d, --dir <dir>', 'The directory containing evolved skills', { default: '.agents/skills' })
+  .option('-r, --repo <path>', 'Specify a local repository path or remote Git URL')
   .action(syncCommand)
 
 // --- Pull Command ---
