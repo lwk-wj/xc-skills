@@ -75,13 +75,25 @@ xc-skills publish
 xc-skills sync
 ```
 
-该命令会自动：
-- 在中央仓库执行快照备份 (Snapshot)
-- 同步 `SKILL.md` 和 `EVOLUTION.md`
-- 自动触发中央仓库索引更新
-- 清理本地同步标记
+该命令采用 **Git 原生历史管理**，会自动：
+- 物理拷贝 `SKILL.md` 和 `EVOLUTION.md` 到中央仓库。
+- 在中央仓库自动执行 **Git Commit** 和 **Git Tag**（格式如 `skill@v1.x.x`）。
+- 自动将本次提交的 **Git Hash** 记录回 `EVOLUTION.md`。
+- 自动触发中央仓库索引更新，并清理本地同步标记。
 
-### 5. 从中央仓库拉取最新 (Pull) 📥
+### 5. 查看历史版本 (View) 🕰️
+
+由于采用了 Git 增量历史管理，仓库中不再有臃肿的 `history` 文件夹。你可以使用 `view` 命令随时查看历史版本：
+
+```bash
+# 交互式选择查看某个技能的进化历史
+xc-skills view use-icon
+
+# 直接查看特定 Hash 版本的技能内容
+xc-skills view use-icon@abc1234
+```
+
+### 6. 从中央仓库拉取最新 (Pull) 📥
 
 当你需要在当前项目中获取中央仓库的最新技能版本时使用。
 
@@ -94,7 +106,7 @@ xc-skills pull
 - 从配置的中央仓库拉取最新版
 - 覆盖本地副本（方便你基于最新版再次进化）
 
-### 6. 查看已安装的技能
+### 7. 查看已安装的技能
 
 ```bash
 # 查看当前项目的技能
@@ -104,7 +116,7 @@ xc-skills list
 xc-skills list -g
 ```
 
-### 6. 清理项目技能目录
+### 8. 清理项目技能目录
 
 ```bash
 xc-skills remove
@@ -115,9 +127,10 @@ xc-skills rm
 
 ## 🔄 自进化工作流
 
-1. **就地进化**：AI 在业务项目（如 `silk-all-backend`）中发现技能缺陷，直接修改 `.agents/skills/xxx/SKILL.md` 并标记待同步。
+1. **就地进化**：AI 在业务项目中发现技能缺陷，直接修改 `.agents/skills/xxx/SKILL.md` 并创建 `PENDING_SYNC.md` 标记。
 2. **本地验证**：在业务项目中验证改进是否有效。
-3. **一键归档**：运行 `xc-skills sync`，将改动同步到中央仓库并自动生成版本历史快照。
+3. **一键同步**：运行 `xc-skills sync`。
+4. **追溯历史**：通过 `EVOLUTION.md` 中的 Hash 或运行 `xc-skills view` 随时回溯之前的版本。
 
 ## 🛠 命令参数
 

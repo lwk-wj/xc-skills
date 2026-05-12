@@ -44,7 +44,7 @@ export async function syncCommand(options: { dir: string }) {
   const s_search = p.spinner()
   s_search.start('正在全量扫描待同步的技能...')
   scan(process.cwd())
-  s_search.stop(`扫描完成`)
+  s_search.stop('扫描完成')
 
   // 去重
   const uniquePendingSkills = Array.from(new Map(pendingSkills.map(s => [s.name, s])).values())
@@ -55,7 +55,7 @@ export async function syncCommand(options: { dir: string }) {
     return
   }
 
-  // --- 优化点：直接展示汇总清单并一次性确认 ---
+  // 展示汇总清单并一次性确认
   p.log.message(`${pc.cyan('待同步清单 (Pending Sync List):')}`)
   uniquePendingSkills.forEach(s => {
     p.log.message(`  ${pc.green('●')} ${pc.bold(s.name)} ${pc.dim('->')} ${pc.dim(s.path.replace(process.cwd(), '.'))}`)
@@ -71,23 +71,49 @@ export async function syncCommand(options: { dir: string }) {
     return
   }
 
+  /**
+   * 从 EVOLUTION.md 中解析最新版本号
+   * 匹配格式: ## v1.2.3 或 ## v1.2.3 — 2026-05-12
+   */
+  function parseLatestVersion(evolutionPath: string): string | null {
+    if (!fs.existsSync(evolutionPath)) return null
+    const content = fs.readFileSync(evolutionPath, 'utf-8')
+    const match = content.match(/^## (v[\d.]+)/m)
+    return match ? match[1] : null
+  }
+
+  /**
+   * 在 EVOLUTION.md 的最新条目标题后追加 commit hash
+   * 如: "## v1.4.1 — 2026-05-12" -> "## v1.4.1 — 2026-05-12 `abc1234`"
+   */
+  function appendHashToEvolution(evolutionPath: string, hash: string) {
+    if (!fs.existsSync(evolutionPath)) return
+    let content = fs.readFileSync(evolutionPath, 'utf-8')
+    // 找到第一个 ## 标题行，追加 hash（如果尚未存在）
+    content = content.replace(
+      /^(## v[\d.]+ — [\d-]+)(.*?)$/m,
+      (match, prefix, rest) => {
+        if (rest.includes('`')) return match // 已有 hash，跳过
+        return `${prefix} \`${hash}\``
+      }
+    )
+    fs.writeFileSync(evolutionPath, content, 'utf-8')
+  }
+
   const s = p.spinner()
+  const repoPath = config.repoPath
 
   for (const skill of uniquePendingSkills) {
     s.start(`正在同步: ${skill.name}`)
 
     const sourceDir = skill.path
-    const targetDir = join(config.repoPath, 'skills', skill.name)
+    const targetDir = join(repoPath, 'skills', skill.name)
 
     try {
-      // A. 在中央仓库执行 snapshot
-      try {
-        execSync(`pnpm start snapshot ${skill.name}`, { cwd: config.repoPath, stdio: 'pipe' })
-      } catch (e) {
-        // 如果失败尝试继续，可能中央仓库还没有该技能
-      }
+      // A. 确保目标目录存在
+      await fs.ensureDir(targetDir)
 
-      // B. 复制文件
+      // B. 复制核心文件
       const filesToSync = ['SKILL.md', 'EVOLUTION.md']
       for (const file of filesToSync) {
         const src = join(sourceDir, file)
@@ -97,15 +123,54 @@ export async function syncCommand(options: { dir: string }) {
         }
       }
 
-      // C. 更新索引
+      // C. 在中央仓库执行 Git Commit
+      const version = parseLatestVersion(join(targetDir, 'EVOLUTION.md'))
+      const commitMsg = `feat(${skill.name}): evolve to ${version || 'latest'}`
+
       try {
-        execSync(`pnpm start index`, { cwd: config.repoPath, stdio: 'pipe' })
+        execSync('git add .', { cwd: repoPath, stdio: 'pipe' })
+        execSync(`git commit -m "${commitMsg}"`, { cwd: repoPath, stdio: 'pipe' })
+      } catch (e: any) {
+        // 如果没有变更（内容完全相同），git commit 会报错，跳过即可
+        const status = execSync('git status --porcelain', { cwd: repoPath }).toString()
+        if (!status.trim()) {
+          s.stop(pc.yellow(`${skill.name}: 内容无变化，已跳过`))
+          await fs.remove(join(sourceDir, 'PENDING_SYNC.md'))
+          continue
+        }
+      }
+
+      // D. 获取 commit hash
+      const hash = execSync('git rev-parse --short HEAD', { cwd: repoPath }).toString().trim()
+
+      // E. 将 hash 写回 EVOLUTION.md
+      appendHashToEvolution(join(targetDir, 'EVOLUTION.md'), hash)
+
+      // F. 修正提交（追加 hash 信息）
+      try {
+        execSync('git add .', { cwd: repoPath, stdio: 'pipe' })
+        execSync('git commit --amend --no-edit', { cwd: repoPath, stdio: 'pipe' })
       } catch (e) {}
 
-      // D. 清理标记
+      // G. 打 Git Tag
+      if (version) {
+        const tagName = `${skill.name}@${version}`
+        try {
+          execSync(`git tag ${tagName}`, { cwd: repoPath, stdio: 'pipe' })
+        } catch (e) {
+          // tag 已存在时忽略
+        }
+      }
+
+      // H. 更新索引
+      try {
+        execSync(`pnpm start index`, { cwd: repoPath, stdio: 'pipe' })
+      } catch (e) {}
+
+      // I. 清理本地标记
       await fs.remove(join(sourceDir, 'PENDING_SYNC.md'))
 
-      s.stop(`同步完成: ${skill.name}`)
+      s.stop(`${pc.green('✔')} ${skill.name} ${version ? pc.dim(`${version}`) : ''} ${pc.dim(`[${hash}]`)}`)
     } catch (err: any) {
       s.stop(`同步失败: ${skill.name}`)
       p.log.error(err.message)

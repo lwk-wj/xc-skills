@@ -7,6 +7,7 @@ import { publishCommand } from './commands/publish.js'
 import { configCommand } from './commands/config.js'
 import { syncCommand } from './commands/sync.js'
 import { pullCommand } from './commands/pull.js'
+import { viewCommand } from './commands/view.js'
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -65,6 +66,11 @@ cli
 cli
   .command('pull [dir]', 'Pull latest skills from the central repository')
   .action(pullCommand)
+
+// --- View Command ---
+cli
+  .command('view <skill>', 'View skill version history (e.g. view use-icon or view use-icon@abc1234)')
+  .action(viewCommand)
 
 cli.help()
 cli.version(pkg.version)
