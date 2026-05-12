@@ -204,6 +204,11 @@ export async function addCommand(source: string, options: AddOptions) {
       `${pc.dim('Strategy:')} ${strategy}`
     ]
     summary.forEach(line => p.log.message(`  ${line}`))
+    
+    if (method === 'symlink') {
+      p.log.warn(pc.yellow('⚠️  警告：软链接模式下，AI 的进化操作将直接修改中央仓库，且可能跳过同步快照逻辑。建议在生产项目中使用 Copy 模式。'))
+    }
+
     const confirm = await p.confirm({ message: '确认安装？(Proceed with installation?)', initialValue: true })
     if (p.isCancel(confirm) || !confirm) {
       if (isTemp) await fs.remove(tempPath)

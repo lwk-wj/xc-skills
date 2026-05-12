@@ -54,9 +54,20 @@ export async function installSkills(options: InstallOptions) {
         }
 
         if (method === 'symlink') {
-          await fs.ensureSymlink(src, dest, 'dir')
+          await fs.ensureDir(dest)
+          const files = await fs.readdir(src)
+          for (const file of files) {
+            if (file === 'history' || file === '.git') continue
+            await fs.ensureSymlink(join(src, file), join(dest, file))
+          }
         } else {
-          await fs.copy(src, dest)
+          // 物理拷贝时排除 history 目录
+          await fs.copy(src, dest, {
+            filter: (srcPath) => {
+              const name = basename(srcPath)
+              return name !== 'history' && name !== '.git'
+            }
+          })
         }
       }
       

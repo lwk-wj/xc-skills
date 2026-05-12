@@ -3,7 +3,7 @@ import { cac } from 'cac'
 import { addCommand } from './commands/add.js'
 import { removeCommand } from './commands/remove.js'
 import { listCommand } from './commands/list.js'
-import { updateCommand } from './commands/update.js'
+import { publishCommand } from './commands/publish.js'
 import { configCommand } from './commands/config.js'
 import { syncCommand } from './commands/sync.js'
 import { readFileSync } from 'node:fs'
@@ -40,13 +40,13 @@ cli
   .option('-g, --global', 'List global skills instead of project skills')
   .action(listCommand)
 
-// --- Update Command ---
+// --- Publish Command ---
 cli
-  .command('update [dir]', 'Update local skills to a remote repository')
+  .command('publish [dir]', 'Publish local skills to a remote repository')
   .option('-r, --remote <url>', 'The target remote repository URL')
   .option('-d, --dir <dir>', 'The directory containing local skills', { default: 'skills' })
   .option('-b, --branch <branch>', 'The target branch', { default: 'main' })
-  .action(updateCommand)
+  .action(publishCommand)
 
 // --- Config Command ---
 cli

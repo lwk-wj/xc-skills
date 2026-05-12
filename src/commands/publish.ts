@@ -6,14 +6,14 @@ import os from 'node:os'
 import { execSync } from 'node:child_process'
 import { getSkillDescription } from '../utils.js'
 
-export interface UpdateOptions {
+export interface PublishOptions {
   remote?: string
   dir: string
   branch?: string
 }
 
-export async function updateCommand(dirArg: string | undefined, options: UpdateOptions) {
-  p.intro(`${pc.bgMagenta(pc.black(' xc-skills update '))}`)
+export async function publishCommand(dirArg: string | undefined, options: PublishOptions) {
+  p.intro(`${pc.bgMagenta(pc.black(' xc-skills publish '))}`)
 
   /**
    * 递归寻找名为 'skills' 的目录
@@ -80,9 +80,9 @@ export async function updateCommand(dirArg: string | undefined, options: UpdateO
     process.exit(1)
   }
 
-  // 2. 选择要更新的技能
+  // 2. 选择要发布的技能
   const selectedSkills = await p.multiselect({
-    message: '选择要更新到远程仓库的技能 (Select skills)',
+    message: '选择要发布到远程仓库的技能 (Select skills)',
     options: availableSkills.map(s => ({ value: s.name, label: s.name, hint: s.description })),
   }) as string[]
 
@@ -109,13 +109,12 @@ export async function updateCommand(dirArg: string | undefined, options: UpdateO
   }
 
   const branch = options.branch || 'main'
-  const tempPath = join(os.tmpdir(), `xc-skills-update-${Date.now()}`)
+  const tempPath = join(os.tmpdir(), `xc-skills-publish-${Date.now()}`)
 
   const s = p.spinner()
   try {
     // 4. 克隆远程仓库
     s.start(`正在连接远程仓库: ${remoteUrl}`)
-    // 使用 git clone 探测，如果失败会抛出异常
     execSync(`git clone --depth 1 ${remoteUrl} ${tempPath}`, { stdio: 'ignore' })
     s.stop(`已连接到远程仓库`)
 
@@ -124,15 +123,21 @@ export async function updateCommand(dirArg: string | undefined, options: UpdateO
 
     // 5. 同步选中的技能
     for (const skill of selectedSkills) {
-      s.start(`正在同步技能: ${skill}`)
+      s.start(`正在发布技能: ${skill}`)
       const localPath = join(skillsPath, skill)
       const targetPath = join(remoteSkillsPath, skill)
 
       if (fs.existsSync(targetPath)) {
         await fs.remove(targetPath)
       }
-      await fs.copy(localPath, targetPath)
-      s.stop(`已同步: ${skill}`)
+      // 物理拷贝时排除 history 目录
+      await fs.copy(localPath, targetPath, {
+        filter: (srcPath) => {
+          const name = basename(srcPath)
+          return name !== 'history' && name !== '.git'
+        }
+      })
+      s.stop(`已准备好: ${skill}`)
     }
 
     // 6. 提交并推送
@@ -140,17 +145,16 @@ export async function updateCommand(dirArg: string | undefined, options: UpdateO
     const gitCmd = (cmd: string) => execSync(cmd, { cwd: tempPath, stdio: 'ignore' })
 
     gitCmd('git add .')
-    const commitMsg = `feat(skills): update ${selectedSkills.join(', ')}`
+    const commitMsg = `feat(skills): publish ${selectedSkills.join(', ')}`
 
     try {
       gitCmd(`git commit -m "${commitMsg}"`)
       gitCmd(`git push origin HEAD`)
-      s.stop(pc.green(`更新成功！已同步至 ${remoteUrl}`))
+      s.stop(pc.green(`发布成功！已同步至 ${remoteUrl}`))
     } catch (e) {
-      // 检查是否有变更
       const status = execSync('git status --porcelain', { cwd: tempPath }).toString()
       if (!status) {
-        s.stop(pc.yellow('内容已是最新，无需推送。'))
+        s.stop(pc.yellow('内容已是最新，无需发布。'))
       } else {
         throw e
       }

@@ -6,9 +6,10 @@
 
 - **内置 Agent 支持**：默认支持 `Antigravity`, `Trae`, `Codex`, `Claude Code` 等工具。
 - **全平台远程安装**：支持从 GitHub, GitLab 以及通用 Git 平台（如 **Coding.net**, 企业级私有仓库）下载并安装技能。
+- **智能过滤**：安装时自动排除 `history` 等管理文件夹，保持项目轻量。
 - **项目级安装 (Project Scope)**：支持将技能安装到当前项目的 `.agent/skills`, `.trae/skills` 等隐藏目录下。
 - **技能描述预览**：在安装选择界面，自动解析并显示每个技能的详细功能描述。
-- **远程同步更新 (Update)**：支持将本地开发的技能一键同步/推送到指定的远程 Git 仓库。
+- **发布到远程 (Publish)** 🚀：支持将本地开发的技能一键推送到指定的远程 Git 仓库。
 - **跨项目自进化同步 (Sync)** 🌟：支持将业务项目中的技能改进一键同步回中央技能仓库。
 - **深度交互流程**：包含技能选择、Agent 选择、安装范围、物理/软链选择等完整生命周期管理。
 
@@ -56,13 +57,13 @@ xc-skills add https://github.com/vuejs-ai/skills.git
 xc-skills add https://e.coding.net/your-team/skills.git
 ```
 
-### 3. 一键同步到远程仓库 (Update)
+### 3. 发布技能到远程仓库 (Publish)
 
-如果你本地开发了新技能，想要推送到团队公共仓库。
+如果你本地开发了新技能，想要推送到团队公共仓库（GitHub/Coding 等）。
 
 ```bash
-# 自动扫描当前目录下的子文件夹作为技能
-xc-skills update
+# 自动扫描当前目录下的子文件夹作为技能并发布
+xc-skills publish
 ```
 
 ### 4. 同步进化到中央仓库 (Sync) 🌟
