@@ -30,7 +30,6 @@ export async function pullCommand(dirArg: string | undefined) {
       }
     }
 
-    // 如果没找到，尝试递归向下一层（处理 Monorepo 结构）
     if (results.length === 0) {
       const files = fs.readdirSync(startPath, { withFileTypes: true })
       for (const file of files) {
@@ -39,58 +38,92 @@ export async function pullCommand(dirArg: string | undefined) {
         }
       }
     }
-
     return Array.from(new Set(results))
   }
 
   const s = p.spinner()
   s.start('正在扫描本地已安装的技能...')
   const localSkillPaths = findInstalledPaths(process.cwd())
-  s.stop(`扫描完成，发现 ${localSkillPaths.length} 个技能存放目录`)
+  s.stop(`扫描完成，发现 ${localSkillPaths.length} 个潜在技能目录`)
 
   if (localSkillPaths.length === 0) {
     p.log.warn('未在当前项目中发现已安装的技能目录。')
     return
   }
 
-  for (const localPath of localSkillPaths) {
-    const installedSkills = (await fs.readdir(localPath, { withFileTypes: true }))
+  // 1. 汇总所有【包含 SKILL.md】的已安装技能（去重）
+  const allInstalledSkillsMap = new Map<string, string[]>()
+  
+  for (const path of localSkillPaths) {
+    const entries = (await fs.readdir(path, { withFileTypes: true }))
       .filter(e => e.isDirectory() && !e.name.startsWith('.'))
-      .map(e => e.name)
-
-    if (installedSkills.length === 0) continue
-
-    p.log.message(`${pc.dim('目录:')} ${localPath.replace(process.cwd(), '.')}`)
     
-    const selected = await p.multiselect({
-      message: `选择要从中央仓库更新的技能:`,
-      options: installedSkills.map(name => ({ value: name, label: name })),
-      initialValues: installedSkills
-    })
-
-    if (p.isCancel(selected)) continue
-
-    const s_pull = p.spinner()
-    s_pull.start('正在拉取更新...')
-
-    try {
-      const centralSkillsPath = join(config.repoPath, 'skills')
+    for (const entry of entries) {
+      const sName = entry.name
+      const skillFile = join(path, sName, 'SKILL.md')
       
-      await installSkills({
-        sourceDir: centralSkillsPath,
-        targetAgents: [{ name: 'Local', path: dirname(localPath) }],
-        selectedSkills: selected as string[],
-        scope: 'custom',
-        method: 'copy', // 默认使用物理拷贝，方便后续再次进化
-        strategy: 'merge',
-        customRoot: localPath
-      })
-      s_pull.stop('更新成功')
-    } catch (err: any) {
-      s_pull.stop(pc.red('更新失败'))
-      p.log.error(err.message)
+      // 核心校验：只有包含 SKILL.md 的才认为是已安装的技能
+      if (await fs.pathExists(skillFile)) {
+        if (!allInstalledSkillsMap.has(sName)) {
+          allInstalledSkillsMap.set(sName, [])
+        }
+        allInstalledSkillsMap.get(sName)!.push(path)
+      }
     }
   }
 
-  p.outro(pc.green('全部拉取操作完成！'))
+  const skillNames = Array.from(allInstalledSkillsMap.keys())
+
+  if (skillNames.length === 0) {
+    p.log.warn('没有发现已安装的技能（未检测到 SKILL.md）。')
+    return
+  }
+
+  // 2. 只问一次：选择要更新的技能
+  const selectedNames = await p.multiselect({
+    message: '选择要从中央仓库拉取更新的技能 (Pull latest version):',
+    options: skillNames.map(name => ({ value: name, label: name })),
+    initialValues: skillNames
+  })
+
+  if (p.isCancel(selectedNames) || (selectedNames as string[]).length === 0) {
+    p.cancel('操作已取消')
+    return
+  }
+
+  const s_pull = p.spinner()
+  s_pull.start('正在拉取更新...')
+
+  try {
+    const centralSkillsPath = join(config.repoPath, 'skills')
+    
+    // 3. 执行更新
+    for (const name of selectedNames as string[]) {
+      const targetPaths = allInstalledSkillsMap.get(name)!
+      
+      for (const targetPath of targetPaths) {
+        // 校验中央仓库是否存在该技能
+        if (!await fs.pathExists(join(centralSkillsPath, name))) {
+          p.log.warn(`中央仓库不存在技能: ${name}，已跳过。`)
+          continue
+        }
+
+        await installSkills({
+          sourceDir: centralSkillsPath,
+          targetAgents: [{ name: 'Local', path: dirname(targetPath) }],
+          selectedSkills: [name],
+          scope: 'custom',
+          method: 'copy',
+          strategy: 'merge',
+          customRoot: targetPath
+        })
+      }
+    }
+    s_pull.stop(pc.green('全部技能已同步至最新版本！'))
+  } catch (err: any) {
+    s_pull.stop(pc.red('拉取过程中发生错误'))
+    p.log.error(err.message)
+  }
+
+  p.outro(pc.green('Pull 完成！'))
 }
