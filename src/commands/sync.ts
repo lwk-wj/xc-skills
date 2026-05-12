@@ -14,55 +14,94 @@ export async function syncCommand(options: { dir: string }) {
     process.exit(1)
   }
 
-  const projectSkillsDir = join(process.cwd(), options.dir)
-  if (!await fs.pathExists(projectSkillsDir)) {
-    p.log.error(`本地技能目录不存在: ${projectSkillsDir}`)
-    process.exit(1)
-  }
+  // 1. 递归搜索所有 PENDING_SYNC.md
+  const pendingSkills: { name: string, path: string }[] = []
+  const EXCLUDE_DIRS = ['node_modules', '.git', 'dist']
 
-  // 1. 扫描带有 PENDING_SYNC.md 的技能
-  const skillFolders = await fs.readdir(projectSkillsDir)
-  const pendingSkills: string[] = []
+  function scan(currentDir: string, depth = 0) {
+    if (depth > 10) return // 增加深度限制到 10
+    if (!fs.existsSync(currentDir)) return
 
-  for (const folder of skillFolders) {
-    const pendingFile = join(projectSkillsDir, folder, 'PENDING_SYNC.md')
-    if (await fs.pathExists(pendingFile)) {
-      pendingSkills.push(folder)
+    let files: fs.Dirent[] = []
+    try {
+      files = fs.readdirSync(currentDir, { withFileTypes: true })
+    } catch (e) { return }
+
+    // 检查当前目录下是否有 PENDING_SYNC.md
+    if (files.some(f => f.name === 'PENDING_SYNC.md')) {
+      pendingSkills.push({
+        name: basename(currentDir),
+        path: currentDir
+      })
+      // 注意：即使找到了也继续搜，防止同名技能安装在不同地方（虽然少见）
+    }
+
+    // 递归搜索子目录
+    for (const file of files) {
+      if (file.isDirectory() && !EXCLUDE_DIRS.includes(file.name)) {
+        scan(join(currentDir, file.name), depth + 1)
+      }
     }
   }
 
-  if (pendingSkills.length === 0) {
+  const s_search = p.spinner()
+  s_search.start('正在全量扫描待同步的技能...')
+  scan(process.cwd())
+  s_search.stop(`扫描完成，发现 ${pendingSkills.length} 个待同步技能`)
+
+  // 1. 去重 (按名称)
+  const uniquePendingSkills = Array.from(new Map(pendingSkills.map(s => [s.name, s])).values())
+
+  if (uniquePendingSkills.length === 0) {
     p.log.info('没有发现待同步的进化技能（未找到 PENDING_SYNC.md）。')
     p.outro('完成')
     return
   }
 
-  p.log.message(pc.yellow(`发现 ${pendingSkills.length} 个待同步技能: ${pendingSkills.join(', ')}`))
+  let selectedSkills = uniquePendingSkills
 
-  const confirm = await p.confirm({
-    message: '确定要将这些进化后的技能同步至中央仓库吗？',
-    initialValue: true,
-  })
+  if (uniquePendingSkills.length > 1) {
+    const selected = await p.multiselect({
+      message: `发现了 ${uniquePendingSkills.length} 个待同步技能，请选择要同步的项目:`,
+      options: uniquePendingSkills.map(s => ({
+        value: s,
+        label: s.name,
+        hint: s.path.replace(process.cwd(), '.')
+      })),
+      initialValues: uniquePendingSkills,
+    })
 
-  if (p.isCancel(confirm) || !confirm) {
-    p.cancel('已取消同步')
-    return
+    if (p.isCancel(selected)) {
+      p.cancel('已取消同步')
+      return
+    }
+    selectedSkills = selected as typeof uniquePendingSkills
+  } else {
+    const confirm = await p.confirm({
+      message: `确定要同步技能 ${pc.cyan(uniquePendingSkills[0].name)} 吗？`,
+      initialValue: true,
+    })
+
+    if (p.isCancel(confirm) || !confirm) {
+      p.cancel('已取消同步')
+      return
+    }
   }
 
   const s = p.spinner()
 
-  for (const skillName of pendingSkills) {
-    s.start(`正在同步: ${skillName}`)
+  for (const skill of selectedSkills) {
+    s.start(`正在同步: ${skill.name}`)
 
-    const sourceDir = join(projectSkillsDir, skillName)
-    const targetDir = join(config.repoPath, 'skills', skillName)
+    const sourceDir = skill.path
+    const targetDir = join(config.repoPath, 'skills', skill.name)
 
     try {
       // A. 在中央仓库执行 snapshot (备份旧版)
       try {
-        execSync(`pnpm start snapshot ${skillName}`, { cwd: config.repoPath, stdio: 'pipe' })
+        execSync(`pnpm start snapshot ${skill.name}`, { cwd: config.repoPath, stdio: 'pipe' })
       } catch (e) {
-        p.log.warn(`[${skillName}] 自动快照失败，请确保中央仓库环境就绪。`)
+        p.log.warn(`[${skill.name}] 自动快照失败，请确保中央仓库环境就绪。`)
       }
 
       // B. 复制文件 (SKILL.md, EVOLUTION.md)
@@ -83,9 +122,9 @@ export async function syncCommand(options: { dir: string }) {
       // D. 清理本地 PENDING_SYNC.md
       await fs.remove(join(sourceDir, 'PENDING_SYNC.md'))
 
-      s.stop(`同步成功: ${skillName}`)
+      s.stop(`同步成功: ${skill.name}`)
     } catch (err: any) {
-      s.stop(`同步失败: ${skillName}`)
+      s.stop(`同步失败: ${skill.name}`)
       p.log.error(err.message)
     }
   }
