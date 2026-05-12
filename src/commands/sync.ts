@@ -172,5 +172,17 @@ export async function syncCommand(options: { dir: string }) {
     }
   }
 
+  // --- 最后的 Push 操作 ---
+  const s_push = p.spinner()
+  s_push.start('正在推送到远程中央仓库...')
+  try {
+    // 使用 --follow-tags 确保新生成的版本 Tag 也能推上去
+    execSync('git push --follow-tags', { cwd: repoPath, stdio: 'pipe' })
+    s_push.stop(pc.green('🚀 已成功同步并推送至远程仓库！'))
+  } catch (e: any) {
+    s_push.stop(pc.yellow('⚠️  本地同步成功，但推送远程失败（可能是网络问题或远程有更新）。'))
+    p.log.warn('你可以稍后在中央仓库手动执行 git push。')
+  }
+
   p.outro(pc.green('全部同步任务已完成！'))
 }
