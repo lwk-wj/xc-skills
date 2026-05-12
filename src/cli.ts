@@ -6,6 +6,7 @@ import { listCommand } from './commands/list.js'
 import { publishCommand } from './commands/publish.js'
 import { configCommand } from './commands/config.js'
 import { syncCommand } from './commands/sync.js'
+import { pullCommand } from './commands/pull.js'
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -56,9 +57,14 @@ cli
 
 // --- Sync Command ---
 cli
-  .command('sync', 'Sync evolved skills (with PENDING_SYNC.md) to central repository')
-  .option('-d, --dir <dir>', 'The directory containing local skills', { default: '.agents/skills' })
+  .command('sync', 'Sync evolved skills back to the central repository')
+  .option('-d, --dir <dir>', 'The directory containing evolved skills', { default: '.agents/skills' })
   .action(syncCommand)
+
+// --- Pull Command ---
+cli
+  .command('pull [dir]', 'Pull latest skills from the central repository')
+  .action(pullCommand)
 
 cli.help()
 cli.version(pkg.version)
