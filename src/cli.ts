@@ -19,7 +19,7 @@ const cli = cac('xc-skills')
 
 // --- Add Command ---
 cli
-  .command('add <source>', 'Add skills from a local directory or GitHub URL')
+  .command('add [source]', 'Add skills from a local directory or GitHub URL')
   .option('-s, --skill <skills>', 'Specific skills to install')
   .option('-a, --agent <agents>', 'Specific agents to install to')
   .option('-d, --dir <dir>', 'The directory name containing skills', { default: 'skills' })

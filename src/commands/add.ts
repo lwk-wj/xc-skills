@@ -9,6 +9,7 @@ import degit from 'degit'
 import { AGENTS } from '../agents.js'
 import { installSkills } from '../install.js'
 import { getSkillDescription } from '../utils.js'
+import { getConfig } from './config.js'
 
 export interface AddOptions {
   skill?: string
@@ -18,8 +19,22 @@ export interface AddOptions {
   yes?: boolean
 }
 
-export async function addCommand(source: string, options: AddOptions) {
+export async function addCommand(sourceArg: string | undefined, options: AddOptions) {
   p.intro(`${pc.bgCyan(pc.black(' xc-skills '))}`)
+
+  const config = await getConfig()
+  let source = sourceArg
+
+  // 如果没有提供 source，尝试使用已配置的中央仓库
+  if (!source) {
+    if (config.repoPath) {
+      source = config.repoPath
+      p.log.info(`💡 未指定来源，将默认使用中央仓库: ${pc.cyan(source)}`)
+    } else {
+      p.log.error('请提供安装来源 (URL 或 路径)，或先配置中央仓库: xc-skills config --repo <path>')
+      process.exit(1)
+    }
+  }
 
   let sourceDir = ''
   let isTemp = false
@@ -67,7 +82,7 @@ export async function addCommand(source: string, options: AddOptions) {
 
   const skillEntries = (await fs.readdir(skillsPath, { withFileTypes: true }))
     .filter(entry => entry.isDirectory() && !entry.name.startsWith('.'))
-  
+
   const availableSkills = skillEntries.map(entry => {
     const name = entry.name
     const description = getSkillDescription(join(skillsPath, name))
@@ -204,7 +219,7 @@ export async function addCommand(source: string, options: AddOptions) {
       `${pc.dim('Strategy:')} ${strategy}`
     ]
     summary.forEach(line => p.log.message(`  ${line}`))
-    
+
     if (method === 'symlink') {
       p.log.warn(pc.yellow('⚠️  提示：软链接模式下，任何修改都会实时同步到中央仓库。进化完成后请务必运行 `xc-skills sync` 进行版本存证。'))
     }
