@@ -96,10 +96,10 @@ export async function addCommand(sourceArg: string | undefined, options: AddOpti
   }
 
   let selectedSkills: string[] = []
-  if (options.yes || options.skill === '*') {
-    selectedSkills = availableSkills.map(s => s.name)
-  } else if (options.skill) {
+  if (options.skill && options.skill !== '*') {
     selectedSkills = options.skill.split(',')
+  } else if (options.yes || options.skill === '*') {
+    selectedSkills = availableSkills.map(s => s.name)
   } else {
     selectedSkills = await p.multiselect({
       message: '第一步：选择要安装的技能 (Select skills)',
@@ -117,11 +117,11 @@ export async function addCommand(sourceArg: string | undefined, options: AddOpti
   let selectedAgents: any[] = []
   if (options.out) {
     selectedAgents = [{ name: 'Custom Path', path: resolve(process.cwd(), options.out) }]
-  } else if (options.yes || options.agent === '*') {
-    selectedAgents = AGENTS
-  } else if (options.agent) {
+  } else if (options.agent && options.agent !== '*') {
     const names = options.agent.split(',')
     selectedAgents = AGENTS.filter(a => names.includes(a.name))
+  } else if (options.yes || options.agent === '*') {
+    selectedAgents = AGENTS
   } else {
     selectedAgents = await p.multiselect({
       message: '第二步：选择目标开发工具 (Select agents)',
