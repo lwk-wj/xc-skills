@@ -27,7 +27,7 @@ export async function removeCommand(options: RemoveOptions) {
       }
     }
   } else {
-    const potentialDirs = ['.agent', '.trae', '.claude', '.codex']
+    const potentialDirs = ['.agents', '.trae', '.claude', '.codex']
     for (const dir of potentialDirs) {
       const skillsPath = join(cwd, dir, 'skills')
       if (fs.existsSync(skillsPath)) {

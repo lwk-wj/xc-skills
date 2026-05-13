@@ -40,8 +40,8 @@ export async function publishCommand(dirArg: string | undefined, options: Publis
       }
     }
 
-    // 3. 特殊处理：检查常见的隐藏目录（如 .agent/skills）
-    const specialDirs = ['.agent', '.trae', '.claude', '.codex']
+    // 3. 特殊处理：检查常见的隐藏目录（如 .agents/skills）
+    const specialDirs = ['.agents', '.trae', '.claude', '.codex']
     for (const dir of specialDirs) {
       const p = join(startPath, dir, 'skills')
       if (fs.existsSync(p)) return p

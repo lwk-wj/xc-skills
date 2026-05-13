@@ -21,8 +21,8 @@ export async function pullCommand(dirArg: string | undefined) {
     const results: string[] = []
     if (depth > 5) return results
 
-    const searchDirs = ['.agent/skills', '.agents/skills', '.trae/skills', '.claude/skills', 'skills']
-    
+    const searchDirs = ['.agents/skills', '.trae/skills', '.claude/skills', 'skills']
+
     for (const rel of searchDirs) {
       const p = join(startPath, rel)
       if (fs.existsSync(p)) {
@@ -53,15 +53,15 @@ export async function pullCommand(dirArg: string | undefined) {
 
   // 1. 汇总所有【包含 SKILL.md】的已安装技能（去重）
   const allInstalledSkillsMap = new Map<string, string[]>()
-  
+
   for (const path of localSkillPaths) {
     const entries = (await fs.readdir(path, { withFileTypes: true }))
       .filter(e => e.isDirectory() && !e.name.startsWith('.'))
-    
+
     for (const entry of entries) {
       const sName = entry.name
       const skillFile = join(path, sName, 'SKILL.md')
-      
+
       // 核心校验：只有包含 SKILL.md 的才认为是已安装的技能
       if (await fs.pathExists(skillFile)) {
         if (!allInstalledSkillsMap.has(sName)) {
@@ -96,11 +96,11 @@ export async function pullCommand(dirArg: string | undefined) {
 
   try {
     const centralSkillsPath = join(config.repoPath, 'skills')
-    
+
     // 3. 执行更新
     for (const name of selectedNames as string[]) {
       const targetPaths = allInstalledSkillsMap.get(name)!
-      
+
       for (const targetPath of targetPaths) {
         // 校验中央仓库是否存在该技能
         if (!await fs.pathExists(join(centralSkillsPath, name))) {
