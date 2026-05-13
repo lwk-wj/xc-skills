@@ -178,8 +178,14 @@ export async function syncCommand(options: { dir: string, repo?: string }) {
       if (version) {
         const tagName = `${skill.name}@${version}`
         try {
-          execSync(`git tag ${tagName}`, { cwd: finalRepoPath, stdio: 'pipe' })
-        } catch (e) {}
+          // 使用附注标签 (Annotated Tag)，确保能被 git push --follow-tags 识别
+          execSync(`git tag -a ${tagName} -m "Version ${version} of ${skill.name}"`, { cwd: finalRepoPath, stdio: 'pipe' })
+        } catch (e: any) {
+          // 如果标签已存在，忽略错误
+          if (!e.message.includes('already exists')) {
+            p.log.warn(`无法创建标签 ${tagName}: ${e.message}`)
+          }
+        }
       }
 
       // 5. 更新索引
