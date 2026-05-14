@@ -59,16 +59,6 @@ export async function removeCommand(options: RemoveOptions) {
     process.exit(0)
   }
 
-  const confirm = await p.confirm({
-    message: `确认删除选中的 ${targets.length} 个目录及其所有技能？(Confirm deletion?)`,
-    initialValue: false
-  })
-
-  if (p.isCancel(confirm) || !confirm) {
-    p.cancel('操作已取消')
-    process.exit(0)
-  }
-
   const s = p.spinner()
   for (const targetPath of targets) {
     const display = targetPath.replace(os.homedir(), '~')
@@ -77,7 +67,8 @@ export async function removeCommand(options: RemoveOptions) {
       await fs.remove(targetPath)
       s.stop(`已删除: ${display}`)
     } catch (err: any) {
-      s.stop(pc.red(`删除 ${display} 失败: ${err.message}`))
+      s.stop(pc.red(`删除 ${display} 失败`))
+      console.error(err)
     }
   }
   p.outro(pc.green('清理完成！'))
