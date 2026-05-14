@@ -37,7 +37,7 @@ export async function configCommand(options: { repo?: string }) {
       { value: 'local', label: 'Local (本地管理)', hint: '直接使用本地硬盘上的统一技能仓库' },
       { value: 'remote', label: 'Remote (远程管理)', hint: '通过 Git URL 拉取/发布技能' }
     ],
-    initialValue: config.mode || 'local'
+    initialValue: 'local' // 始终默认为 local
   })
 
   if (p.isCancel(mode)) {
@@ -46,10 +46,13 @@ export async function configCommand(options: { repo?: string }) {
   }
 
   // 2. 设置资产中心 (本地路径或远程地址)
+  const defaultLocalPath = '/Users/xc/Desktop/XcSkill/skills'
+  const defaultRemoteUrl = 'https://e.coding.net/realmicro/silkworm/skills.git'
+
   const repoPathInput = await p.text({
     message: mode === 'local' ? '请输入本地技能仓库的绝对路径' : '请输入远程技能仓库的 Git 地址',
-    placeholder: mode === 'local' ? '/Users/xc/Desktop/XcSkill/skills' : 'https://e.coding.net/xxx/skills.git',
-    initialValue: config.repoPath || (mode === 'local' ? '/Users/xc/Desktop/XcSkill/skills' : 'https://e.coding.net/realmicro/silkworm/skills.git'),
+    placeholder: mode === 'local' ? defaultLocalPath : defaultRemoteUrl,
+    initialValue: mode === 'local' ? defaultLocalPath : defaultRemoteUrl, // 始终使用固定预设
     validate: (value) => {
       if (!value.trim()) return mode === 'local' ? '路径不能为空' : 'Git 地址不能为空'
     }
@@ -65,7 +68,7 @@ export async function configCommand(options: { repo?: string }) {
   const remoteUrl = await p.text({
     message: '请输入用于发布技能的远程仓库地址 (Remote URL)',
     placeholder: 'https://e.coding.net/xxx/skills.git',
-    initialValue: mode === 'remote' ? repoPath : (config.remoteUrl || 'https://e.coding.net/realmicro/silkworm/skills.git'),
+    initialValue: mode === 'remote' ? repoPath : defaultRemoteUrl, // 只有 Remote 模式下联动，Local 模式下用固定预设
     validate: (value) => {
       if (!value.trim()) return '远程仓库地址不能为空'
     }
@@ -80,7 +83,7 @@ export async function configCommand(options: { repo?: string }) {
   const defaultBranch = await p.text({
     message: '请设置默认发布分支 (Default Branch)',
     placeholder: 'main',
-    initialValue: config.defaultBranch || 'master',
+    initialValue: 'master', // 始终默认为 master
     validate: (value) => {
       if (!value.trim()) return '分支名称不能为空'
     }
@@ -95,7 +98,7 @@ export async function configCommand(options: { repo?: string }) {
   const defaultGroupsStr = await p.text({
     message: '请设置默认加载的平台/分组文件夹名称 (多个用逗号分隔)',
     placeholder: 'miniapp, backend, h5, common',
-    initialValue: config.defaultGroups ? config.defaultGroups.join(', ') : 'miniapp, backend, h5, common',
+    initialValue: 'miniapp, backend, h5, common', // 始终使用预设分组
     validate: (value) => {
       if (!value.trim()) return '文件夹名称不能为空'
     }
