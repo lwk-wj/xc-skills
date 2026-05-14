@@ -1,6 +1,7 @@
 import * as p from '@clack/prompts'
 import pc from 'picocolors'
 import fs from 'fs-extra'
+import os from 'node:os'
 import { join, resolve, basename, dirname } from 'node:path'
 import { getConfig } from './config.js'
 import { installSkills } from '../install.js'
@@ -9,9 +10,49 @@ export async function pullCommand(dirArg: string | undefined) {
   p.intro(`${pc.bgBlue(pc.black(' xc-skills pull '))}`)
 
   const config = await getConfig()
-  if (!config.repoPath) {
-    p.log.error('未配置中央仓库路径。请先运行: xc-skills config --repo <path>')
+  let repoPath = config.repoPath
+  const branch = config.defaultBranch || 'master'
+  let isTempRepo = false
+  const tempRepoPath = join(os.tmpdir(), `xc-skills-pull-repo-${Date.now()}`)
+
+  if (!repoPath) {
+    p.log.error('未配置中央仓库路径。请先运行: xc-skills config')
     process.exit(1)
+  }
+
+  // --- Git 同步逻辑：确保拿到的是云端最新代码 ---
+  const isRemote = repoPath.startsWith('http') || repoPath.startsWith('git@')
+  const { execSync } = await import('node:child_process')
+
+  if (isRemote) {
+    const s_clone = p.spinner()
+    s_clone.start(`正在从远程仓库同步 [${branch}]...`)
+    try {
+      execSync(`git clone --depth 1 --branch ${branch} ${repoPath} ${tempRepoPath}`, {
+        stdio: 'ignore',
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+      })
+      repoPath = tempRepoPath
+      isTempRepo = true
+      s_clone.stop(`远程同步完成 [${branch}]`)
+    } catch (err: any) {
+      s_clone.stop(pc.red('远程同步失败，请检查网络、分支名或权限'))
+      process.exit(1)
+    }
+  } else {
+    repoPath = resolve(repoPath)
+    const s_resync = p.spinner()
+    s_resync.start(`正在同步本地中央仓库 [${branch}]...`)
+    try {
+      execSync(`git fetch origin ${branch} && git reset --hard origin/${branch}`, {
+        cwd: repoPath,
+        stdio: 'ignore',
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+      })
+      s_resync.stop(`本地仓库已同步 [${branch}]`)
+    } catch (e) {
+      s_resync.stop(pc.yellow('本地同步跳过（可能尚未关联远程或网络原因）'))
+    }
   }
 
   /**
@@ -48,6 +89,7 @@ export async function pullCommand(dirArg: string | undefined) {
 
   if (localSkillPaths.length === 0) {
     p.log.warn('未在当前项目中发现已安装的技能目录。')
+    if (isTempRepo) await fs.remove(tempRepoPath)
     return
   }
 
@@ -76,6 +118,7 @@ export async function pullCommand(dirArg: string | undefined) {
 
   if (skillNames.length === 0) {
     p.log.warn('没有发现已安装的技能（未检测到 SKILL.md）。')
+    if (isTempRepo) await fs.remove(tempRepoPath)
     return
   }
 
@@ -88,16 +131,17 @@ export async function pullCommand(dirArg: string | undefined) {
 
   if (p.isCancel(selectedNames) || (selectedNames as string[]).length === 0) {
     p.cancel('操作已取消')
+    if (isTempRepo) await fs.remove(tempRepoPath)
     return
   }
 
   const s_pull = p.spinner()
-  s_pull.start('正在连接中央仓库并拉取更新...')
+  s_pull.start('正在分析中央仓库并提取更新...')
 
   try {
     // @ts-ignore
     const { getSkillsRecursive } = await import('../utils.js')
-    const repoSkills = await getSkillsRecursive(config.repoPath)
+    const repoSkills = await getSkillsRecursive(repoPath!)
 
     // 3. 执行更新
     for (const name of selectedNames as string[]) {
@@ -110,21 +154,35 @@ export async function pullCommand(dirArg: string | undefined) {
       }
 
       for (const targetPath of targetPaths) {
-        await installSkills({
-          sourceDir: dirname(skillInRepo.path), // 传入该技能所在的父目录
-          targetAgents: [{ name: 'Local', path: dirname(targetPath) }],
-          selectedSkills: [name],
-          scope: 'custom',
-          method: 'copy',
-          strategy: 'merge',
-          customRoot: targetPath
-        })
+        // targetPath 通常是 .agents/skills 这种目录
+        try {
+          await installSkills({
+            sourceDir: dirname(skillInRepo.path), 
+            targetAgents: [{ name: 'Project', path: dirname(targetPath) }], // 指向 .agents 这一层
+            selectedSkills: [name],
+            scope: 'custom',
+            method: 'copy',
+            strategy: 'merge',
+            customRoot: targetPath
+          })
+          p.log.success(`成功更新: ${pc.cyan(name)} -> ${pc.dim(targetPath)}`)
+        } catch (innerErr: any) {
+          p.log.error(`更新技能 ${name} 失败: ${innerErr.message}`)
+        }
       }
     }
     s_pull.stop(pc.green('全部技能已同步至最新版本！'))
   } catch (err: any) {
-    s_pull.stop(pc.red('拉取过程中发生错误'))
-    console.error(err)
+    s_pull.stop(pc.red(`拉取失败: ${err.message}`))
+    if (err.stderr) {
+      console.error(pc.red('Git Error Output:'), err.stderr.toString())
+    } else {
+      console.error(err)
+    }
+  }
+
+  if (isTempRepo) {
+    await fs.remove(tempRepoPath)
   }
 
   p.outro(pc.green('Pull 完成！'))
