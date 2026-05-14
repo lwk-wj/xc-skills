@@ -147,13 +147,32 @@ export async function configCommand(options: { repo?: string }) {
         const parentDir = dirname(newConfig.repoPath)
         await fs.ensureDir(parentDir)
         
-        execSync(`git clone --branch ${newConfig.defaultBranch} ${newConfig.remoteUrl} "${newConfig.repoPath}"`, { 
-          stdio: 'ignore',
-          env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
-        })
-        s.stop(pc.green(`仓库克隆完成！已存至: ${newConfig.repoPath}`))
+        try {
+          // 尝试直接克隆指定分支
+          execSync(`git clone --branch ${newConfig.defaultBranch} ${newConfig.remoteUrl} "${newConfig.repoPath}"`, { 
+            stdio: 'ignore',
+            env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+          })
+          s.stop(pc.green(`仓库克隆完成！已存至: ${newConfig.repoPath}`))
+        } catch (cloneErr) {
+          // 如果克隆失败，尝试从默认分支（如 master）切出来
+          s.message(pc.yellow(`分支 ${newConfig.defaultBranch} 不存在，正在尝试从 master 分支创建并同步...`))
+          
+          // 1. 先克隆主分支
+          execSync(`git clone ${newConfig.remoteUrl} "${newConfig.repoPath}"`, { 
+            stdio: 'ignore',
+            env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+          })
+          
+          // 2. 切出新分支并推送到远程
+          const gitOpts = { cwd: newConfig.repoPath, stdio: 'ignore' as const, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }
+          execSync(`git checkout -b ${newConfig.defaultBranch}`, gitOpts)
+          execSync(`git push origin ${newConfig.defaultBranch}`, gitOpts)
+          
+          s.stop(pc.green(`分支已创建并推送到远程：${newConfig.defaultBranch}`))
+        }
       } catch (err: any) {
-        s.stop(pc.red('克隆失败，请检查网络或远程地址是否正确。'))
+        s.stop(pc.red('初始化失败，请检查网络、权限或远程地址是否正确。'))
         p.log.error(err.message)
       }
     }
