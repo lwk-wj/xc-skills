@@ -92,24 +92,26 @@ export async function pullCommand(dirArg: string | undefined) {
   }
 
   const s_pull = p.spinner()
-  s_pull.start('正在拉取更新...')
+  s_pull.start('正在连接中央仓库并拉取更新...')
 
   try {
-    const centralSkillsPath = join(config.repoPath, 'skills')
+    // @ts-ignore
+    const { getSkillsRecursive } = await import('../utils.js')
+    const repoSkills = await getSkillsRecursive(config.repoPath)
 
     // 3. 执行更新
     for (const name of selectedNames as string[]) {
       const targetPaths = allInstalledSkillsMap.get(name)!
+      const skillInRepo = repoSkills.find(s => s.name === name)
+
+      if (!skillInRepo) {
+        p.log.warn(`中央仓库不存在技能: ${name}，已跳过。`)
+        continue
+      }
 
       for (const targetPath of targetPaths) {
-        // 校验中央仓库是否存在该技能
-        if (!await fs.pathExists(join(centralSkillsPath, name))) {
-          p.log.warn(`中央仓库不存在技能: ${name}，已跳过。`)
-          continue
-        }
-
         await installSkills({
-          sourceDir: centralSkillsPath,
+          sourceDir: dirname(skillInRepo.path), // 传入该技能所在的父目录
           targetAgents: [{ name: 'Local', path: dirname(targetPath) }],
           selectedSkills: [name],
           scope: 'custom',
@@ -122,7 +124,7 @@ export async function pullCommand(dirArg: string | undefined) {
     s_pull.stop(pc.green('全部技能已同步至最新版本！'))
   } catch (err: any) {
     s_pull.stop(pc.red('拉取过程中发生错误'))
-    p.log.error(err.message)
+    console.error(err)
   }
 
   p.outro(pc.green('Pull 完成！'))
