@@ -22,16 +22,17 @@ export interface AddOptions {
 export async function addCommand(sourceArg: string | undefined, options: AddOptions) {
   p.intro(`${pc.bgCyan(pc.black(' xc-skills '))}`)
 
+  // @ts-ignore
   const config = await getConfig()
   let source = sourceArg
 
-  // 如果没有提供 source，尝试使用已配置的中央仓库
+  // 1. 如果没有提供 source，尝试使用已配置的中央仓库
   if (!source) {
     if (config.repoPath) {
       source = config.repoPath
-      p.log.info(`💡 未指定来源，将默认使用中央仓库: ${pc.cyan(source)}`)
+      p.log.info(`💡 未指定来源，将默认使用已配置的仓库: ${pc.cyan(source)}`)
     } else {
-      p.log.error('请提供安装来源 (URL 或 路径)，或先配置中央仓库: xc-skills config --repo <path>')
+      p.log.error('请提供安装来源 (URL 或 路径)，或先运行 xc-skills config 进行初始化设置')
       process.exit(1)
     }
   }
@@ -40,7 +41,8 @@ export async function addCommand(sourceArg: string | undefined, options: AddOpti
   let isTemp = false
   const tempPath = join(os.tmpdir(), `xc-skills-${Date.now()}`)
 
-  const isUrl = source.startsWith('http') || source.startsWith('git@') || (source.includes('/') && !fs.existsSync(resolve(process.cwd(), source)))
+  // 判断是否是 URL
+  const isUrl = config.mode === 'remote' || source.startsWith('http') || source.startsWith('git@') || (source.includes('/') && !fs.existsSync(resolve(process.cwd(), source)))
 
   if (isUrl) {
     const s = p.spinner()
@@ -61,7 +63,8 @@ export async function addCommand(sourceArg: string | undefined, options: AddOpti
         success = true
         s.stop(`下载成功 (git clone)`)
       } catch (gitErr: any) {
-        s.stop(pc.red(`下载失败: ${gitErr.message}`))
+        s.stop(pc.red(`下载失败`))
+        console.error(gitErr)
         process.exit(1)
       }
     }
@@ -73,7 +76,49 @@ export async function addCommand(sourceArg: string | undefined, options: AddOpti
     sourceDir = resolve(process.cwd(), source)
   }
 
-  const skillsPath = join(sourceDir, options.dir)
+  // 2. 增加分组选择逻辑
+  let selectedGroup = ''
+  if (config.defaultGroups && config.defaultGroups.length > 0) {
+    // 自动扫描实际存在的 group
+    const existingGroups = []
+    for (const g of config.defaultGroups) {
+      if (fs.existsSync(join(sourceDir, g, options.dir))) {
+        existingGroups.push(g)
+      } else if (fs.existsSync(join(sourceDir, g))) {
+         // Fallback if 'skills' folder is not inside the group folder
+         existingGroups.push(g)
+      }
+    }
+
+    if (existingGroups.length > 0) {
+      selectedGroup = await p.select({
+        message: '请选择目标平台/分组 (Select Platform Group)',
+        options: [
+          { value: '', label: 'Default (默认根目录)', hint: '扫描根目录下的 skills 文件夹' },
+          ...existingGroups.map(g => ({ value: g, label: g }))
+        ],
+      }) as string
+
+      if (p.isCancel(selectedGroup)) {
+        if (isTemp) await fs.remove(tempPath)
+        p.cancel('已取消')
+        process.exit(0)
+      }
+    }
+  }
+
+  // 计算最终的 skills 目录路径
+  // 如果选了分组，路径类似: miniapp/skills
+  let skillsPath = join(sourceDir, options.dir)
+  if (selectedGroup) {
+     const p1 = join(sourceDir, selectedGroup, options.dir)
+     if (fs.existsSync(p1)) {
+        skillsPath = p1
+     } else {
+        skillsPath = join(sourceDir, selectedGroup)
+     }
+  }
+
   if (!fs.existsSync(skillsPath)) {
     p.log.error(`找不到技能目录: ${skillsPath}`)
     if (isTemp) await fs.remove(tempPath)
@@ -90,7 +135,7 @@ export async function addCommand(sourceArg: string | undefined, options: AddOpti
   })
 
   if (availableSkills.length === 0) {
-    p.log.error(`在 ${skillsPath} 中没有找到任何有效的技能子目录`)
+    p.log.error(`在 ${skillsPath} 中没有找到任何有效的技能`)
     if (isTemp) await fs.remove(tempPath)
     process.exit(1)
   }
@@ -102,7 +147,7 @@ export async function addCommand(sourceArg: string | undefined, options: AddOpti
     selectedSkills = availableSkills.map(s => s.name)
   } else {
     selectedSkills = await p.multiselect({
-      message: '第一步：选择要安装的技能 (Select skills)',
+      message: `第一步：选择要安装的技能${selectedGroup ? ` [所属分组: ${selectedGroup}]` : ''}`,
       options: availableSkills.map(s => ({ value: s.name, label: s.name, hint: s.description })),
       initialValues: [availableSkills[0].name]
     }) as string[]
@@ -192,11 +237,15 @@ export async function addCommand(sourceArg: string | undefined, options: AddOpti
       }
     }
     if (exists) {
+      p.log.warn(pc.yellow('⚠️  检测到目标路径已存在同名技能。'))
+      if (method === 'symlink') {
+        p.log.message(pc.dim('  (系统将自动接管这些文件夹并将其转换为指向中央仓库的软链接)'))
+      }
       strategy = await p.select({
-        message: '检测到目标目录已存在，如何处理？(Handle conflicts)',
+        message: '如何处理现有目录？(Handle conflicts)',
         options: [
-          { value: 'merge', label: 'Merge (合并)', hint: '只更新选中的技能，保留其他技能' },
-          { value: 'overwrite', label: 'Overwrite (覆盖)', hint: '清空目标目录后再安装' }
+          { value: 'merge', label: 'Merge (合并更新)', hint: '仅替换选中的技能为软链接，保留其他文件' },
+          { value: 'overwrite', label: 'Overwrite (重装)', hint: '清空目标目录后再重新安装' }
         ]
       }) as 'merge' | 'overwrite'
     }
