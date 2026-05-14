@@ -55,9 +55,17 @@ export async function installSkills(options: InstallOptions) {
 
         if (method === 'symlink') {
           await fs.ensureDir(dest)
+          
+          // 核心修复：如果源端没有 EVOLUTION.md，先补齐它，确保软链接能成功建立
+          const srcEvolution = join(src, 'EVOLUTION.md')
+          if (!await fs.pathExists(srcEvolution)) {
+            const template = `# ${skill} Evolution History\n\n## v1.0.0 — ${new Date().toISOString().split('T')[0]}\n\n**触发原因**: 初始安装\n**变更内容**:\n1. 初始化记录文件。\n`
+            await fs.writeFile(srcEvolution, template, 'utf-8')
+          }
+
           const files = await fs.readdir(src)
           for (const file of files) {
-            if (file === 'history' || file === '.git') continue
+            if (file === 'history' || file === '.git' || file === 'PENDING_SYNC.md') continue
             await fs.ensureSymlink(join(src, file), join(dest, file))
           }
         } else {
