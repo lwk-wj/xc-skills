@@ -47,7 +47,7 @@ cli
   .command('publish [dir]', 'Publish local skills to a remote repository')
   .option('-r, --remote <url>', 'The target remote repository URL')
   .option('-d, --dir <dir>', 'The directory containing local skills', { default: 'skills' })
-  .option('-b, --branch <branch>', 'The target branch', { default: 'main' })
+  .option('-b, --branch <branch>', 'The target branch')
   .action(publishCommand)
 
 // --- Config Command ---
