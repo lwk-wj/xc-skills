@@ -20,7 +20,7 @@ function parseEvolution(content: string): VersionEntry[] {
   const blocks = content.split(/^(?=## v)/m)
 
   for (const block of blocks) {
-    const headerMatch = block.match(/^## (v[\d.]+)\s*—\s*([\d-]+)\s*(?:`([a-f0-9]+)`)?/m)
+    const headerMatch = block.match(/^##\s*(v[\d.]+)\s*—\s*(\d{4}-\d{2}-\d{2})\s*(?:`([a-f0-9]+)`)?/m)
     if (!headerMatch) continue
 
     const reasonMatch = block.match(/\*\*触发原因\*\*[：:]\s*(.+)/m)
@@ -60,13 +60,23 @@ export async function viewCommand(skillArg: string | undefined) {
     targetHash = parts[1]
   }
 
-  const skillDir = join(config.repoPath, 'skills', skillName)
-  const evolutionPath = join(skillDir, 'EVOLUTION.md')
+  // 解析进化历史
+  const s_scan = p.spinner()
+  s_scan.start('正在定位技能路径...')
+  // @ts-ignore
+  const { getSkillsRecursive } = await import('../utils.js')
+  const repoSkills = await getSkillsRecursive(config.repoPath)
+  const skillInRepo = repoSkills.find(s => s.name === skillName)
 
-  if (!fs.existsSync(skillDir)) {
+  if (!skillInRepo) {
+    s_scan.stop(pc.red('定位失败'))
     p.log.error(`技能 "${skillName}" 在中央仓库中不存在。`)
     process.exit(1)
   }
+  s_scan.stop(`已找到技能: ${pc.dim(skillInRepo.path.replace(config.repoPath, ''))}`)
+
+  const skillDir = skillInRepo.path
+  const evolutionPath = join(skillDir, 'EVOLUTION.md')
 
   // 解析进化历史
   const evolutionContent = fs.existsSync(evolutionPath)
@@ -74,9 +84,13 @@ export async function viewCommand(skillArg: string | undefined) {
     : ''
   const versions = parseEvolution(evolutionContent)
 
+  // 计算相对于仓库根目录的路径，用于 git show
+  const relativeSkillPath = skillInRepo.path.replace(config.repoPath, '').replace(/^[/\\]/, '')
+  const relativeMdPath = join(relativeSkillPath, 'SKILL.md')
+
   // 如果直接指定了 hash，跳过选择
   if (targetHash) {
-    showVersionContent(config.repoPath, skillName, targetHash)
+    showVersionContent(config.repoPath, relativeMdPath, targetHash)
     return
   }
 
@@ -132,14 +146,14 @@ export async function viewCommand(skillArg: string | undefined) {
     p.log.message(pc.dim('─'.repeat(60)))
     p.outro('当前版本')
   } else {
-    showVersionContent(config.repoPath, skillName, selected as string)
+    showVersionContent(config.repoPath, relativeMdPath, selected as string)
   }
 }
 
-function showVersionContent(repoPath: string, skillName: string, hash: string) {
+function showVersionContent(repoPath: string, relativeMdPath: string, hash: string) {
   try {
     const content = execSync(
-      `git show ${hash}:skills/${skillName}/SKILL.md`,
+      `git show ${hash}:${relativeMdPath}`,
       { cwd: repoPath }
     ).toString()
 
@@ -149,6 +163,7 @@ function showVersionContent(repoPath: string, skillName: string, hash: string) {
     p.outro(`版本 ${pc.dim(`[${hash}]`)}`)
   } catch (e) {
     p.log.error(`无法获取版本 ${hash} 的内容。请确认 Hash 是否正确。`)
+    console.error(e)
 
     // 尝试用 git tag 查找
     try {
