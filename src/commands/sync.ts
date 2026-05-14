@@ -5,17 +5,19 @@ import * as p from '@clack/prompts'
 import pc from 'picocolors'
 import { getConfig } from './config.js'
 import { execSync } from 'node:child_process'
+import { getSkillsRecursive } from '../utils.js'
 
 export async function syncCommand(options: { dir: string, repo?: string }) {
   p.intro(`${pc.bgGreen(pc.black(' xc-skills sync '))}`)
 
   const config = await getConfig()
   let repoPath = options.repo || config.repoPath
+  const branch = config.defaultBranch || 'main'
   let isTempRepo = false
   const tempRepoPath = join(os.tmpdir(), `xc-skills-sync-repo-${Date.now()}`)
 
   if (!repoPath) {
-    p.log.error('未配置中央仓库路径。请使用 --repo <path/url> 或运行: xc-skills config --repo <path>')
+    p.log.error('未配置中央仓库路径。请使用 --repo <path/url> 或运行: xc-skills config')
     process.exit(1)
   }
 
@@ -24,15 +26,19 @@ export async function syncCommand(options: { dir: string, repo?: string }) {
 
   if (isRemote) {
     const s_clone = p.spinner()
-    s_clone.start(`正在准备远程同步环境: ${pc.cyan(repoPath)}`)
+    s_clone.start(`正在准备远程同步环境 [${branch}]: ${pc.cyan(repoPath)}`)
     try {
-      execSync(`git clone --depth 1 ${repoPath} ${tempRepoPath}`, { stdio: 'ignore' })
+      // 核心修复：克隆时直接指定分支
+      execSync(`git clone --depth 1 --branch ${branch} ${repoPath} ${tempRepoPath}`, { 
+        stdio: 'ignore',
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+      })
       repoPath = tempRepoPath
       isTempRepo = true
-      s_clone.stop('远程环境准备就绪')
+      s_clone.stop(`远程环境准备就绪 [${branch}]`)
     } catch (err: any) {
-      s_clone.stop(pc.red('远程仓库拉取失败'))
-      p.log.error(err.message)
+      s_clone.stop(pc.red('远程仓库拉取失败，请检查分支名称或权限'))
+      console.error(err)
       process.exit(1)
     }
   } else {
@@ -40,6 +46,19 @@ export async function syncCommand(options: { dir: string, repo?: string }) {
     if (!fs.existsSync(repoPath)) {
       p.log.error(`本地目标仓库路径不存在: ${repoPath}`)
       process.exit(1)
+    }
+    // 核心修复：本地仓库在同步前【不再】执行 reset --hard，防止回滚掉用户通过软链进行的实时修改
+    const s_resync = p.spinner()
+    s_resync.start(`正在检查本地中央仓库 [${branch}]...`)
+    try {
+      execSync(`git fetch origin ${branch}`, { 
+        cwd: repoPath, 
+        stdio: 'ignore',
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+      })
+      s_resync.stop(`本地中央仓库已就绪 [${branch}]`)
+    } catch (e) {
+      s_resync.stop(pc.yellow('本地中央仓库同步跳过（可能尚未关联远程或网络原因）'))
     }
   }
 
@@ -92,52 +111,57 @@ export async function syncCommand(options: { dir: string, repo?: string }) {
     p.log.message(`  ${pc.green('●')} ${pc.bold(s.name)} ${isSymlink ? pc.yellow('[软链]') : pc.blue('[拷贝]')} ${pc.dim(s.path.replace(process.cwd(), '.'))}`)
   })
 
-  const confirmAll = await p.confirm({
-    message: `确认同步以上 ${uniquePendingSkills.length} 个技能到目标仓库？`,
-    initialValue: true,
-  })
-
-  if (p.isCancel(confirmAll) || !confirmAll) {
-    if (isTempRepo) await fs.remove(tempRepoPath)
-    p.cancel('已取消同步')
-    return
-  }
-
   function parseLatestVersion(evolutionPath: string): string | null {
     if (!fs.existsSync(evolutionPath)) return null
     const content = fs.readFileSync(evolutionPath, 'utf-8')
-    const match = content.match(/^## (v[\d.]+)/m)
+    // 更加精确的匹配：## vX.Y.Z 且后面跟着日期
+    const match = content.match(/^##\s*(v[\d.]+)\s*—\s*\d{4}-\d{2}-\d{2}/m)
     return match ? match[1] : null
   }
 
   function appendHashToEvolution(evolutionPath: string, hash: string) {
     if (!fs.existsSync(evolutionPath)) return
     let content = fs.readFileSync(evolutionPath, 'utf-8')
+    // 统一匹配逻辑，确保能正确找到并更新第一行版本号
     content = content.replace(
-      /^(## v[\d.]+ — [\d-]+)(.*?)$/m,
+      /^(##\s*v[\d.]+\s*—\s*\d{4}-\d{2}-\d{2})(.*?)$/m,
       (match, prefix, rest) => {
-        if (rest.includes('`')) return match
+        if (rest.includes('`')) return match // 如果已经有 hash 了，跳过
         return `${prefix} \`${hash}\``
       }
     )
     fs.writeFileSync(evolutionPath, content, 'utf-8')
   }
 
-  const s = p.spinner()
   const finalRepoPath = repoPath!
+  
+  const s_repo = p.spinner()
+  s_repo.start(`正在扫描中央仓库结构...`)
+  const repoSkills = await getSkillsRecursive(finalRepoPath)
+  s_repo.stop('中央仓库扫描完成')
 
   for (const skill of uniquePendingSkills) {
-    s.start(`正在同步: ${skill.name}`)
+    const s_item = p.spinner()
+    s_item.start(`正在同步: ${skill.name}`)
 
     const sourceDir = skill.path
-    const targetDir = join(finalRepoPath, 'skills', skill.name)
+    
+    // 寻找该技能在仓库中的原位置
+    const existingInRepo = repoSkills.find(s => s.name === skill.name)
+    let targetDir = ''
+    
+    if (existingInRepo) {
+      targetDir = existingInRepo.path
+    } else {
+      // 如果是新技能，默认放入根目录下的 skills 文件夹
+      targetDir = join(finalRepoPath, 'skills', skill.name)
+    }
 
     const skillFile = join(sourceDir, 'SKILL.md')
     const needsCopy = fs.existsSync(skillFile) && !fs.lstatSync(skillFile).isSymbolicLink() && !fs.lstatSync(sourceDir).isSymbolicLink()
-
     try {
+      await fs.ensureDir(targetDir)
       if (needsCopy) {
-        await fs.ensureDir(targetDir)
         const filesToSync = ['SKILL.md', 'EVOLUTION.md']
         for (const file of filesToSync) {
           const src = join(sourceDir, file)
@@ -148,24 +172,42 @@ export async function syncCommand(options: { dir: string, repo?: string }) {
         }
       }
 
+      // 0. 自动补全 EVOLUTION.md (如果缺失)
+      const evolutionFile = join(targetDir, 'EVOLUTION.md')
+      if (!fs.existsSync(evolutionFile)) {
+        const initialContent = `# ${skill.name} Evolution History\n\n## v1.0.0 — ${new Date().toISOString().split('T')[0]}\n\n**触发原因**: 初始同步/补全记录\n**变更内容**:\n1. 初始化技能进化记录文件。\n`
+        fs.writeFileSync(evolutionFile, initialContent, 'utf-8')
+      }
+
       // 1. Git Commit
-      const version = parseLatestVersion(join(targetDir, 'EVOLUTION.md'))
+      const version = parseLatestVersion(evolutionFile)
       const commitMsg = `feat(${skill.name}): evolve to ${version || 'latest'}`
 
       try {
-        execSync('git add .', { cwd: finalRepoPath, stdio: 'pipe' })
-        execSync(`git commit -m "${commitMsg}"`, { cwd: finalRepoPath, stdio: 'pipe' })
+        execSync('git add .', { 
+          cwd: finalRepoPath, 
+          stdio: 'pipe',
+          env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+        })
+        execSync(`git commit -m "${commitMsg}"`, { 
+          cwd: finalRepoPath, 
+          stdio: 'pipe',
+          env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+        })
       } catch (e: any) {
         const status = execSync('git status --porcelain', { cwd: finalRepoPath }).toString()
         if (!status.trim()) {
-          s.stop(pc.yellow(`${skill.name}: 内容无变化，已跳过`))
+          s_item.stop(pc.yellow(`${skill.name}: 内容无变化，已跳过`))
           await fs.remove(join(sourceDir, 'PENDING_SYNC.md'))
           continue
         }
       }
 
       // 2. 获取 Hash 并写回
-      const hash = execSync('git rev-parse --short HEAD', { cwd: finalRepoPath }).toString().trim()
+      const hash = execSync('git rev-parse --short HEAD', { 
+        cwd: finalRepoPath,
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+      }).toString().trim()
       appendHashToEvolution(join(targetDir, 'EVOLUTION.md'), hash)
 
       // 3. 修正提交
@@ -178,43 +220,68 @@ export async function syncCommand(options: { dir: string, repo?: string }) {
       if (version) {
         const tagName = `${skill.name}@${version}`
         try {
-          // 使用附注标签 (Annotated Tag)，确保能被 git push --follow-tags 识别
-          execSync(`git tag -a ${tagName} -m "Version ${version} of ${skill.name}"`, { cwd: finalRepoPath, stdio: 'pipe' })
+          execSync(`git tag -f -a ${tagName} -m "Version ${version} of ${skill.name}"`, { 
+            cwd: finalRepoPath, 
+            stdio: 'pipe',
+            env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+          })
+          p.log.success(`已创建/更新标签: ${pc.cyan(tagName)}`)
         } catch (e: any) {
-          // 如果标签已存在，忽略错误
-          if (!e.message.includes('already exists')) {
-            p.log.warn(`无法创建标签 ${tagName}: ${e.message}`)
-          }
+          p.log.warn(`无法创建标签 ${tagName}: ${e.message}`)
         }
+      } else {
+        p.log.warn(`${skill.name}: 未能在 EVOLUTION.md 中解析到合法的版本号格式，已跳过打标签。`)
       }
 
-      // 5. 更新索引
-      try {
-        execSync(`pnpm start index`, { cwd: finalRepoPath, stdio: 'pipe' })
-      } catch (e) {}
-
-      // 6. 清理本地标记
+      // 5. 清理本地标记
       await fs.remove(join(sourceDir, 'PENDING_SYNC.md'))
 
-      s.stop(`${pc.green('✔')} ${skill.name} ${version ? pc.dim(`${version}`) : ''} ${pc.dim(`[${hash}]`)}`)
+      s_item.stop(`${pc.green('✔')} ${skill.name} ${version ? pc.dim(`${version}`) : ''} ${pc.dim(`[${hash}]`)}`)
     } catch (err: any) {
-      s.stop(`同步失败: ${skill.name}`)
-      p.log.error(err.message)
+      s_item.stop(`同步失败: ${skill.name}`)
+      console.error(err)
     }
   }
 
-  // --- 最后的 Push 操作 ---
-  const s_push = p.spinner()
-  s_push.start('正在推送到远程目标仓库...')
+  // --- 5. 更新索引 (所有技能同步完后统一更新一次) ---
+  const s_index = p.spinner()
   try {
-    execSync('git push --follow-tags', { cwd: finalRepoPath, stdio: 'pipe' })
-    s_push.stop(pc.green('🚀 已成功同步并推送至仓库！'))
+    if (fs.existsSync(join(finalRepoPath, 'package.json'))) {
+      const pkg = JSON.parse(fs.readFileSync(join(finalRepoPath, 'package.json'), 'utf-8'))
+      if (pkg.scripts && pkg.scripts.index) {
+        s_index.start('正在更新中央仓库全量索引...')
+        execSync(`pnpm start index`, { 
+          cwd: finalRepoPath, 
+          stdio: 'pipe',
+          env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+        })
+        execSync(`git add . && git commit -m "chore: update skills index" || true`, { 
+          cwd: finalRepoPath, 
+          stdio: 'pipe',
+          env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+        })
+        s_index.stop(pc.green('索引更新完成'))
+      }
+    }
+  } catch (e) {}
+
+  // --- 6. 最后的 Push 操作 ---
+  const s_push = p.spinner()
+  s_push.start(`正在推送到远程目标仓库 [${branch}]...`)
+  try {
+    execSync(`git push origin HEAD:${branch} --follow-tags`, { 
+      cwd: finalRepoPath, 
+      stdio: 'pipe',
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+    })
+    s_push.stop(pc.green(`🚀 已成功同步并推送至远程仓库 [${branch}]！`))
   } catch (e: any) {
-    if (isRemote) {
+    if (repoPath?.startsWith('http') || repoPath?.startsWith('git@')) {
       s_push.stop(pc.red('❌ 远程推送失败。'))
     } else {
-      s_push.stop(pc.yellow('⚠️  本地同步成功，但推送远程失败。'))
+      s_push.stop(pc.yellow('⚠️  本地仓库已更新，但推送远程(如果有)失败。'))
     }
+    console.error(e)
   }
 
   // 如果是临时目录，清理掉
