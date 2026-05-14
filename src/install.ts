@@ -21,7 +21,7 @@ export async function installSkills(options: InstallOptions) {
   for (const agent of targetAgents) {
     // 1. 计算安装路径
     let targetRoot = ''
-    
+
     if (customRoot) {
       // 优先级最高：用户指定的自定义路径
       targetRoot = customRoot
@@ -35,7 +35,7 @@ export async function installSkills(options: InstallOptions) {
     }
 
     s.start(`正在部署到 ${agent.name} (${targetRoot})...`)
-    
+
     try {
       // 2. 根据策略处理目标目录
       if (strategy === 'overwrite' && await fs.pathExists(targetRoot)) {
@@ -70,10 +70,11 @@ export async function installSkills(options: InstallOptions) {
           })
         }
       }
-      
+
       s.stop(`成功同步到: ${agent.name} (${scope === 'custom' ? '自定义路径' : scope + ' 模式'})`)
     } catch (err: any) {
-      s.stop(`${pc.red('失败')}: ${agent.name} - ${err.message}`)
+      s.stop(`${pc.red('失败')}: ${agent.name}`)
+      console.error(err)
     }
   }
 }
