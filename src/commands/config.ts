@@ -129,5 +129,35 @@ export async function configCommand(options: { repo?: string }) {
   p.log.message(`  ${pc.dim('默认发布分支:')} ${pc.yellow(newConfig.defaultBranch)}`)
   p.log.message(`  ${pc.dim('技能分组:')} ${pc.blue(newConfig.defaultGroups?.join(' | '))}`)
 
+  // --- 自动化克隆逻辑 ---
+  if (newConfig.mode === 'local' && !fs.existsSync(newConfig.repoPath)) {
+    const shouldClone = await p.confirm({
+      message: pc.yellow(`检测到本地目录 ${newConfig.repoPath} 不存在，是否立即克隆远程仓库？`),
+      initialValue: true
+    })
+
+    if (shouldClone && !p.isCancel(shouldClone)) {
+      const s = p.spinner()
+      s.start(`正在准备克隆仓库 [${newConfig.defaultBranch}]...`)
+      try {
+        const { execSync } = await import('node:child_process')
+        const { dirname } = await import('node:path')
+        
+        // 确保父级目录存在
+        const parentDir = dirname(newConfig.repoPath)
+        await fs.ensureDir(parentDir)
+        
+        execSync(`git clone --branch ${newConfig.defaultBranch} ${newConfig.remoteUrl} "${newConfig.repoPath}"`, { 
+          stdio: 'ignore',
+          env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+        })
+        s.stop(pc.green(`仓库克隆完成！已存至: ${newConfig.repoPath}`))
+      } catch (err: any) {
+        s.stop(pc.red('克隆失败，请检查网络或远程地址是否正确。'))
+        p.log.error(err.message)
+      }
+    }
+  }
+
   p.outro(pc.green('✅ 配置已成功保存！(Saved to ~/.xc-skills-config.json)'))
 }
