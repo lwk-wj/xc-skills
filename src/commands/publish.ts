@@ -5,6 +5,7 @@ import { join, resolve, basename } from 'node:path'
 import os from 'node:os'
 import { execSync } from 'node:child_process'
 import { getSkillDescription } from '../utils.js'
+import { getConfig } from './config.js'
 
 export interface PublishOptions {
   remote?: string
@@ -91,8 +92,12 @@ export async function publishCommand(dirArg: string | undefined, options: Publis
     process.exit(0)
   }
 
+  const config = await getConfig()
+  // 调试日志：确认配置加载情况
+  p.log.info(pc.dim(`[Debug] 当前配置模式: ${config.mode}, 默认分支: ${config.defaultBranch || '未设置'}`))
+
   // 3. 获取远程仓库地址
-  let remoteUrl = options.remote
+  let remoteUrl = options.remote || config.remoteUrl
   if (!remoteUrl) {
     remoteUrl = await p.text({
       message: '请输入目标远程仓库地址 (Remote URL)',
@@ -108,7 +113,29 @@ export async function publishCommand(dirArg: string | undefined, options: Publis
     process.exit(0)
   }
 
-  const branch = options.branch || 'main'
+  // 3.5 增加分组选择逻辑
+  let selectedGroup = ''
+  if (config.defaultGroups && config.defaultGroups.length > 0) {
+    selectedGroup = await p.select({
+      message: '请选择发布到的目标分组 (Select Target Group)',
+      options: [
+        { value: '', label: 'Default (根目录 skills/)', hint: '发布到仓库顶层的 skills 文件夹' },
+        ...config.defaultGroups.map(g => ({ value: g, label: g }))
+      ],
+    }) as string
+
+    if (p.isCancel(selectedGroup)) {
+      p.cancel('已取消')
+      process.exit(0)
+    }
+  }
+
+  const branch = options.branch || config.defaultBranch || 'main'
+
+  if (!config.defaultBranch && !options.branch) {
+    p.log.warn(pc.yellow('ℹ️  提示：未设置默认发布分支，建议运行 `xc-skills config` 进行设置。当前默认使用 [main]'))
+  }
+
   const tempPath = join(os.tmpdir(), `xc-skills-publish-${Date.now()}`)
 
   const s = p.spinner()
@@ -118,7 +145,7 @@ export async function publishCommand(dirArg: string | undefined, options: Publis
     execSync(`git clone --depth 1 ${remoteUrl} ${tempPath}`, { stdio: 'ignore' })
     s.stop(`已连接到远程仓库`)
 
-    const remoteSkillsPath = join(tempPath, 'skills')
+    const remoteSkillsPath = selectedGroup ? join(tempPath, selectedGroup, 'skills') : join(tempPath, 'skills')
     await fs.ensureDir(remoteSkillsPath)
 
     // 5. 同步选中的技能
@@ -126,6 +153,19 @@ export async function publishCommand(dirArg: string | undefined, options: Publis
       s.start(`正在发布技能: ${skill}`)
       const localPath = join(skillsPath, skill)
       const targetPath = join(remoteSkillsPath, skill)
+
+      if (!fs.existsSync(localPath)) {
+        s.stop(pc.yellow(`跳过: ${skill} (本地目录不存在)`))
+        continue
+      }
+
+      // 补齐 EVOLUTION.md 防止发布后的技能无法建立软链接
+      const evolutionPath = join(localPath, 'EVOLUTION.md')
+      if (!fs.existsSync(evolutionPath)) {
+        await fs.ensureDir(localPath) // 确保父目录存在
+        const template = `# ${skill} Evolution History\n\n## v1.0.0 — ${new Date().toISOString().split('T')[0]}\n\n**触发原因**: 初始发布补全\n**变更内容**:\n1. 初始化记录文件。\n`
+        fs.writeFileSync(evolutionPath, template, 'utf-8')
+      }
 
       if (fs.existsSync(targetPath)) {
         await fs.remove(targetPath)
@@ -149,8 +189,8 @@ export async function publishCommand(dirArg: string | undefined, options: Publis
 
     try {
       gitCmd(`git commit -m "${commitMsg}"`)
-      gitCmd(`git push origin HEAD`)
-      s.stop(pc.green(`发布成功！已同步至 ${remoteUrl}`))
+      gitCmd(`git push origin HEAD:${branch}`)
+      s.stop(pc.green(`发布成功！已同步至 ${remoteUrl} [${branch}]`))
     } catch (e) {
       const status = execSync('git status --porcelain', { cwd: tempPath }).toString()
       if (!status) {
@@ -160,8 +200,58 @@ export async function publishCommand(dirArg: string | undefined, options: Publis
       }
     }
 
+    // 方案 A: 自动转义逻辑 (仅限 local 模式)
+    if (config.mode === 'local' && config.repoPath) {
+      const { installSkills } = await import('../install.js')
+      const targetRepoPath = resolve(config.repoPath)
+      
+      p.log.info(pc.cyan(`ℹ️  检测到本地管理模式 (仓库: ${targetRepoPath})`))
+      p.log.info(pc.cyan(`ℹ️  正在同步本地中央仓库 [${branch}]...`))
+      
+      try {
+        // 核心修复：改用 fetch + reset --hard，强制本地中央仓库对齐远程，无视任何冲突
+        execSync(`git fetch origin ${branch} && git reset --hard origin/${branch}`, { 
+          cwd: targetRepoPath, 
+          stdio: 'pipe',
+          env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+        })
+        p.log.success(pc.green(`✅ 本地中央仓库同步完成 [${branch}]`))
+      } catch (e: any) {
+        p.log.warn(`⚠️  本地中央仓库强制同步失败，请检查网络或手动进入 ${targetRepoPath} 检查。`)
+        p.log.warn(`错误详情: ${e.message}`)
+      }
+
+      p.log.info(pc.cyan('ℹ️  正在将本地技能转换为软链接...'))
+      
+      // 重新计算在中央仓库中的真实源路径 (考虑分组)
+      const realSourceDir = selectedGroup 
+        ? join(targetRepoPath, selectedGroup, 'skills') 
+        : join(targetRepoPath, 'skills')
+
+      // 删除项目下的真实文件夹，准备转链
+      for (const skill of selectedSkills) {
+        const localSkillPath = join(skillsPath, skill)
+        if (fs.existsSync(localSkillPath)) {
+          await fs.remove(localSkillPath)
+        }
+      }
+
+        await installSkills({
+          sourceDir: realSourceDir,
+          targetAgents: [{ name: 'Project', path: '.' }],
+          selectedSkills: selectedSkills,
+          scope: 'custom',
+          method: 'symlink',
+          strategy: 'merge',
+          customRoot: skillsPath
+        })
+
+      p.log.success(pc.green(`✅ 已成功将 ${selectedSkills.length} 个技能转换为中央仓库软链接`))
+    }
+
   } catch (err: any) {
     s.stop(pc.red(`操作失败，请检查网络或 Git 权限。`))
+    console.error(err)
   } finally {
     if (fs.existsSync(tempPath)) {
       await fs.remove(tempPath)
