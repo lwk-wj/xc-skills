@@ -41,39 +41,56 @@ export async function addCommand(sourceArg: string | undefined, options: AddOpti
   let isTemp = false
   const tempPath = join(os.tmpdir(), `xc-skills-${Date.now()}`)
 
-  // 判断是否是 URL
   const isUrl = config.mode === 'remote' || source.startsWith('http') || source.startsWith('git@') || (source.includes('/') && !fs.existsSync(resolve(process.cwd(), source)))
+  const branch = config.defaultBranch || 'master'
 
   if (isUrl) {
     const s = p.spinner()
-    s.start(`正在尝试下载技能库: ${source}`)
+    // 如果是远程模式且指定了分支，优先使用分支拉取
+    const sourceWithBranch = (config.mode === 'remote' && branch) ? `${source}#${branch}` : source
+    s.start(`正在尝试下载技能库 [${branch}]: ${source}`)
     let success = false
     try {
-      const emitter = degit(source, { cache: false, force: true, verbose: false })
+      const emitter = degit(sourceWithBranch, { cache: false, force: true, verbose: false })
       await emitter.clone(tempPath)
       success = true
-      s.stop(`下载成功 (degit)`)
+      s.stop(`下载成功 [${branch}]`)
     } catch (err) {
       try {
-        s.message(`degit 不支持此平台，正在尝试使用 git clone...`)
-        execSync(`git clone --depth 1 ${source} ${tempPath}`, { stdio: 'ignore' })
-        if (fs.existsSync(join(tempPath, '.git'))) {
-          await fs.remove(join(tempPath, '.git'))
-        }
+        s.message(`正在尝试使用 git clone --branch ${branch}...`)
+        execSync(`git clone --depth 1 --branch ${branch} ${source} ${tempPath}`, { 
+          stdio: 'pipe',
+          env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+        })
         success = true
-        s.stop(`下载成功 (git clone)`)
+        s.stop(`下载成功 (Git)`)
       } catch (gitErr: any) {
-        s.stop(pc.red(`下载失败`))
-        console.error(gitErr)
+        const errorMsg = gitErr.stderr?.toString() || gitErr.message
+        s.stop(pc.red(`下载失败: ${errorMsg.split('\n')[0]}`))
         process.exit(1)
       }
     }
-    if (success) {
-      sourceDir = tempPath
-      isTemp = true
-    }
+    sourceDir = tempPath
+    isTemp = true
   } else {
     sourceDir = resolve(process.cwd(), source)
+    
+    // 如果是 Local 模式且正在使用配置的仓库，先执行同步
+    if (config.mode === 'local' && sourceDir === resolve(config.repoPath!)) {
+      const s_sync = p.spinner()
+      s_sync.start(`正在对齐中央仓库状态 [${branch}]...`)
+      try {
+        execSync(`git pull --rebase --autostash origin ${branch}`, { 
+          cwd: sourceDir, 
+          stdio: 'pipe',
+          env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+        })
+        s_sync.stop(`中央仓库已就绪 [${branch}]`)
+      } catch (e: any) {
+        const errorMsg = e.stderr?.toString() || e.message
+        s_sync.stop(pc.yellow(`同步跳过: ${errorMsg.split('\n')[0]}`))
+      }
+    }
   }
 
   // 2. 增加分组选择逻辑
