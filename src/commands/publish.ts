@@ -131,21 +131,44 @@ export async function publishCommand(dirArg: string | undefined, options: Publis
   }
 
   const branch = options.branch || config.defaultBranch || 'main'
-
-  if (!config.defaultBranch && !options.branch) {
-    p.log.warn(pc.yellow('ℹ️  提示：未设置默认发布分支，建议运行 `xc-skills config` 进行设置。当前默认使用 [main]'))
-  }
-
+  const isRemoteMode = config.mode === 'remote'
   const tempPath = join(os.tmpdir(), `xc-skills-publish-${Date.now()}`)
+
+  // 确定最终操作的仓库根目录
+  const finalRepoPath = isRemoteMode ? tempPath : resolve(config.repoPath!)
 
   const s = p.spinner()
   try {
-    // 4. 克隆远程仓库
-    s.start(`正在连接远程仓库: ${remoteUrl}`)
-    execSync(`git clone --depth 1 ${remoteUrl} ${tempPath}`, { stdio: 'ignore' })
-    s.stop(`已连接到远程仓库`)
+    if (isRemoteMode) {
+      // 4. 克隆远程仓库 (仅限 Remote 模式)
+      s.start(`正在连接远程仓库 [${branch}]: ${remoteUrl}`)
+      try {
+        execSync(`git clone --depth 1 --branch ${branch} ${remoteUrl} ${tempPath}`, {
+          stdio: 'pipe',
+          env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+        })
+        s.stop(`已连接到远程仓库 [${branch}]`)
+      } catch (e: any) {
+        s.stop(pc.red(`克隆分支 ${branch} 失败，请确认分支是否存在。`))
+        throw e
+      }
+    } else {
+      // 4. 同步本地中央仓库 (仅限 Local 模式)
+      s.start(`正在对齐本地中央仓库 [${branch}]...`)
+      try {
+        execSync(`git pull --rebase --autostash origin ${branch}`, {
+          cwd: finalRepoPath,
+          stdio: 'pipe',
+          env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+        })
+        s.stop(`本地中央仓库已对齐 [${branch}]`)
+      } catch (e: any) {
+        const errorMsg = e.stderr?.toString() || e.message
+        s.stop(pc.yellow(`远程同步跳过: ${errorMsg.split('\n')[0]}`))
+      }
+    }
 
-    const remoteSkillsPath = selectedGroup ? join(tempPath, selectedGroup, 'skills') : join(tempPath, 'skills')
+    const remoteSkillsPath = selectedGroup ? join(finalRepoPath, selectedGroup, 'skills') : join(finalRepoPath, 'skills')
     await fs.ensureDir(remoteSkillsPath)
 
     // 5. 同步选中的技能
@@ -159,73 +182,117 @@ export async function publishCommand(dirArg: string | undefined, options: Publis
         continue
       }
 
-      // 补齐 EVOLUTION.md 防止发布后的技能无法建立软链接
+      // 1. 真身校验：检查本地技能（或其内部文件）是否已经软链接到中央仓库
+      let isAlreadyLinked = false
+      if (fs.existsSync(targetPath)) {
+        try {
+          const realLocal = await fs.realpath(localPath)
+          const realTarget = await fs.realpath(targetPath)
+          
+          if (realLocal === realTarget) {
+            isAlreadyLinked = true
+          } else {
+            // 如果文件夹本身不是链接，检查内部文件
+            const files = await fs.readdir(localPath)
+            for (const file of files) {
+              const filePath = join(localPath, file)
+              const lstats = await fs.lstat(filePath)
+              if (lstats.isSymbolicLink()) {
+                const realFile = await fs.realpath(filePath)
+                if (realFile.startsWith(realTarget)) {
+                  isAlreadyLinked = true
+                  break
+                }
+              }
+            }
+          }
+        } catch (e) {
+          // 路径解析失败视为未链接
+        }
+      }
+
+      // 2. 补齐 EVOLUTION.md (如果是软链接，这一步改动会实时同步到中央仓库)
       const evolutionPath = join(localPath, 'EVOLUTION.md')
       if (!fs.existsSync(evolutionPath)) {
-        await fs.ensureDir(localPath) // 确保父目录存在
+        await fs.ensureDir(localPath)
         const template = `# ${skill} Evolution History\n\n## v1.0.0 — ${new Date().toISOString().split('T')[0]}\n\n**触发原因**: 初始发布补全\n**变更内容**:\n1. 初始化记录文件。\n`
         fs.writeFileSync(evolutionPath, template, 'utf-8')
       }
 
-      if (fs.existsSync(targetPath)) {
-        await fs.remove(targetPath)
-      }
-      // 物理拷贝时排除 history 目录
-      await fs.copy(localPath, targetPath, {
-        filter: (srcPath) => {
-          const name = basename(srcPath)
-          return name !== 'history' && name !== '.git'
+      // 3. 同步内容
+      if (!isAlreadyLinked) {
+        // 只有在非软链接状态下，才需要执行“删除后拷贝”
+        if (fs.existsSync(targetPath)) {
+          await fs.remove(targetPath)
         }
-      })
-      s.stop(`已准备好: ${skill}`)
+        // 物理拷贝 (强制解引用，确保发布的是真实内容)
+        await fs.copy(localPath, targetPath, {
+          dereference: true,
+          filter: (srcPath) => {
+            const name = basename(srcPath)
+            return name !== 'history' && name !== '.git'
+          }
+        })
+        s.stop(`已同步到中央仓库: ${skill}`)
+      } else {
+        s.stop(`已处于同步状态: ${skill}`)
+      }
     }
 
     // 6. 提交并推送
     s.start(`正在推送到远程...`)
-    const gitCmd = (cmd: string) => execSync(cmd, { cwd: tempPath, stdio: 'ignore' })
-
-    gitCmd('git add .')
-    const commitMsg = `feat(skills): publish ${selectedSkills.join(', ')}`
+    const gitCmd = (cmd: string) => execSync(cmd, { cwd: finalRepoPath, stdio: 'pipe', env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } })
 
     try {
-      gitCmd(`git commit -m "${commitMsg}"`)
-      gitCmd(`git push origin HEAD:${branch}`)
-      s.stop(pc.green(`发布成功！已同步至 ${remoteUrl} [${branch}]`))
-    } catch (e) {
-      const status = execSync('git status --porcelain', { cwd: tempPath }).toString()
-      if (!status) {
-        s.stop(pc.yellow('内容已是最新，无需发布。'))
-      } else {
-        throw e
+      gitCmd('git add -A')
+      const commitMsg = `feat(skills): publish ${selectedSkills.join(', ')}`
+
+      try {
+        gitCmd(`git commit -m "${commitMsg}"`)
+        gitCmd(`git push origin HEAD:${branch}`)
+        s.stop(pc.green(`发布成功！已同步至 ${remoteUrl} [${branch}]`))
+      } catch (e) {
+        const status = execSync('git status --porcelain', { cwd: finalRepoPath }).toString()
+        if (!status) {
+          p.log.info(pc.red(`  [Debug] Git 未检测到任何变化。操作目录: ${finalRepoPath}`))
+          s.stop(pc.yellow('内容已是最新，无需发布。'))
+        } else {
+          p.log.info(pc.red(`  [Debug] Git 检测到了变化但提交失败。当前状态:\n${status}`))
+          throw e
+        }
       }
+    } catch (addErr: any) {
+      s.stop(pc.red('文件暂存 (git add) 失败'))
+      throw addErr
     }
 
     // 方案 A: 自动转义逻辑 (仅限 local 模式)
     if (config.mode === 'local' && config.repoPath) {
       const { installSkills } = await import('../install.js')
       const targetRepoPath = resolve(config.repoPath)
-      
+
       p.log.info(pc.cyan(`ℹ️  检测到本地管理模式 (仓库: ${targetRepoPath})`))
       p.log.info(pc.cyan(`ℹ️  正在同步本地中央仓库 [${branch}]...`))
-      
+
+      // 1. 同步中央仓库（使用 pull --rebase 替代 reset --hard，保护已有的软链修改）
+      const s_sync = p.spinner()
+      s_sync.start(`正在同步本地中央仓库 [${branch}]...`)
       try {
-        // 核心修复：改用 fetch + reset --hard，强制本地中央仓库对齐远程，无视任何冲突
-        execSync(`git fetch origin ${branch} && git reset --hard origin/${branch}`, { 
-          cwd: targetRepoPath, 
-          stdio: 'pipe',
+        execSync(`git pull --rebase --autostash origin ${branch}`, {
+          cwd: targetRepoPath,
+          stdio: 'ignore',
           env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
         })
-        p.log.success(pc.green(`✅ 本地中央仓库同步完成 [${branch}]`))
-      } catch (e: any) {
-        p.log.warn(`⚠️  本地中央仓库强制同步失败，请检查网络或手动进入 ${targetRepoPath} 检查。`)
-        p.log.warn(`错误详情: ${e.message}`)
+        s_sync.stop(`本地中央仓库已就绪 [${branch}]`)
+      } catch (e) {
+        s_sync.stop(pc.yellow('远程同步跳过（可能尚未关联远程或没有更新）'))
       }
 
       p.log.info(pc.cyan('ℹ️  正在将本地技能转换为软链接...'))
-      
+
       // 重新计算在中央仓库中的真实源路径 (考虑分组)
-      const realSourceDir = selectedGroup 
-        ? join(targetRepoPath, selectedGroup, 'skills') 
+      const realSourceDir = selectedGroup
+        ? join(targetRepoPath, selectedGroup, 'skills')
         : join(targetRepoPath, 'skills')
 
       // 删除项目下的真实文件夹，准备转链
@@ -236,15 +303,15 @@ export async function publishCommand(dirArg: string | undefined, options: Publis
         }
       }
 
-        await installSkills({
-          sourceDir: realSourceDir,
-          targetAgents: [{ name: 'Project', path: '.' }],
-          selectedSkills: selectedSkills,
-          scope: 'custom',
-          method: 'symlink',
-          strategy: 'merge',
-          customRoot: skillsPath
-        })
+      await installSkills({
+        sourceDir: realSourceDir,
+        targetAgents: [{ name: 'Project', path: '.' }],
+        selectedSkills: selectedSkills,
+        scope: 'custom',
+        method: 'symlink',
+        strategy: 'merge',
+        customRoot: skillsPath
+      })
 
       p.log.success(pc.green(`✅ 已成功将 ${selectedSkills.length} 个技能转换为中央仓库软链接`))
     }

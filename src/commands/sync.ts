@@ -11,54 +11,42 @@ export async function syncCommand(options: { dir: string, repo?: string }) {
   p.intro(`${pc.bgGreen(pc.black(' xc-skills sync '))}`)
 
   const config = await getConfig()
-  let repoPath = options.repo || config.repoPath
   const branch = config.defaultBranch || 'main'
-  let isTempRepo = false
-  const tempRepoPath = join(os.tmpdir(), `xc-skills-sync-repo-${Date.now()}`)
+  const isRemoteMode = config.mode === 'remote'
+  const tempPath = join(os.tmpdir(), `xc-skills-sync-${Date.now()}`)
+  const finalRepoPath = isRemoteMode ? tempPath : resolve(config.repoPath!)
 
-  if (!repoPath) {
-    p.log.error('未配置中央仓库路径。请使用 --repo <path/url> 或运行: xc-skills config')
-    process.exit(1)
-  }
-
-  // 检测是否为远程 URL
-  const isRemote = repoPath.startsWith('http') || repoPath.startsWith('git@')
-
-  if (isRemote) {
+  if (isRemoteMode) {
     const s_clone = p.spinner()
-    s_clone.start(`正在准备远程同步环境 [${branch}]: ${pc.cyan(repoPath)}`)
+    s_clone.start(`正在连接远程仓库 [${branch}]: ${config.remoteUrl}`)
     try {
-      // 核心修复：克隆时直接指定分支
-      execSync(`git clone --depth 1 --branch ${branch} ${repoPath} ${tempRepoPath}`, { 
+      execSync(`git clone --depth 1 --branch ${branch} ${config.remoteUrl} ${tempPath}`, { 
         stdio: 'ignore',
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
       })
-      repoPath = tempRepoPath
-      isTempRepo = true
-      s_clone.stop(`远程环境准备就绪 [${branch}]`)
-    } catch (err: any) {
-      s_clone.stop(pc.red('远程仓库拉取失败，请检查分支名称或权限'))
-      console.error(err)
+      s_clone.stop(`已连接到远程仓库 [${branch}]`)
+    } catch (e) {
+      s_clone.stop(pc.red(`克隆远程仓库失败，请检查分支 ${branch} 是否存在`))
       process.exit(1)
     }
   } else {
-    repoPath = resolve(process.cwd(), repoPath)
-    if (!fs.existsSync(repoPath)) {
-      p.log.error(`本地目标仓库路径不存在: ${repoPath}`)
+    if (!fs.existsSync(finalRepoPath)) {
+      p.log.error(`本地目标仓库路径不存在: ${finalRepoPath}`)
       process.exit(1)
     }
-    // 核心修复：本地仓库在同步前【不再】执行 reset --hard，防止回滚掉用户通过软链进行的实时修改
+    // 核心修复：本地仓库在同步前尝试 pull --rebase，对齐远程状态
     const s_resync = p.spinner()
-    s_resync.start(`正在检查本地中央仓库 [${branch}]...`)
+    s_resync.start(`正在对齐远程状态 [${branch}]...`)
     try {
-      execSync(`git fetch origin ${branch}`, { 
-        cwd: repoPath, 
-        stdio: 'ignore',
+      execSync(`git pull --rebase --autostash origin ${branch}`, { 
+        cwd: finalRepoPath, 
+        stdio: 'pipe',
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
       })
       s_resync.stop(`本地中央仓库已就绪 [${branch}]`)
-    } catch (e) {
-      s_resync.stop(pc.yellow('本地中央仓库同步跳过（可能尚未关联远程或网络原因）'))
+    } catch (e: any) {
+      const errorMsg = e.stderr?.toString() || e.message
+      s_resync.stop(pc.yellow(`远程同步跳过: ${errorMsg.split('\n')[0]}`))
     }
   }
 
@@ -98,7 +86,7 @@ export async function syncCommand(options: { dir: string, repo?: string }) {
 
   if (uniquePendingSkills.length === 0) {
     p.log.info('没有发现待同步的进化技能（未找到 PENDING_SYNC.md）。')
-    if (isTempRepo) await fs.remove(tempRepoPath)
+    if (isRemoteMode && fs.existsSync(tempPath)) await fs.remove(tempPath)
     p.outro('完成')
     return
   }
@@ -133,8 +121,6 @@ export async function syncCommand(options: { dir: string, repo?: string }) {
     fs.writeFileSync(evolutionPath, content, 'utf-8')
   }
 
-  const finalRepoPath = repoPath!
-  
   const s_repo = p.spinner()
   s_repo.start(`正在扫描中央仓库结构...`)
   const repoSkills = await getSkillsRecursive(finalRepoPath)
@@ -157,23 +143,52 @@ export async function syncCommand(options: { dir: string, repo?: string }) {
       targetDir = join(finalRepoPath, 'skills', skill.name)
     }
 
-    const skillFile = join(sourceDir, 'SKILL.md')
-    const needsCopy = fs.existsSync(skillFile) && !fs.lstatSync(skillFile).isSymbolicLink() && !fs.lstatSync(sourceDir).isSymbolicLink()
+    // 1. 真身校验：检查本地项目技能是否已经软链接到中央仓库
+    let isAlreadyLinked = false
+    if (fs.existsSync(targetDir)) {
+      try {
+        const realSource = await fs.realpath(sourceDir)
+        const realTarget = await fs.realpath(targetDir)
+        if (realSource === realTarget) {
+          isAlreadyLinked = true
+        } else {
+          // 检查内部关键文件
+          const skillFile = join(sourceDir, 'SKILL.md')
+          if (fs.existsSync(skillFile) && fs.lstatSync(skillFile).isSymbolicLink()) {
+            const realSkillFile = await fs.realpath(skillFile)
+            if (realSkillFile.startsWith(realTarget)) {
+              isAlreadyLinked = true
+            }
+          }
+        }
+      } catch (e) {}
+    }
+
     try {
       await fs.ensureDir(targetDir)
-      if (needsCopy) {
+
+      // 2. 同步内容 (仅在非链接状态下执行)
+      if (!isAlreadyLinked) {
         const filesToSync = ['SKILL.md', 'EVOLUTION.md']
         for (const file of filesToSync) {
           const src = join(sourceDir, file)
           const dest = join(targetDir, file)
           if (await fs.pathExists(src)) {
-            await fs.copy(src, dest)
+            // 确保解引用，拷贝真实内容
+            await fs.copy(src, dest, { dereference: true })
           }
         }
       }
 
-      // 0. 自动补全 EVOLUTION.md (如果缺失)
+      // 3. 自动补全 EVOLUTION.md (如果缺失)
       const evolutionFile = join(targetDir, 'EVOLUTION.md')
+      // 防御性：如果是断掉的链接，先删除
+      try {
+        if (fs.lstatSync(evolutionFile).isSymbolicLink() && !fs.existsSync(evolutionFile)) {
+          await fs.remove(evolutionFile)
+        }
+      } catch (e) {}
+
       if (!fs.existsSync(evolutionFile)) {
         const initialContent = `# ${skill.name} Evolution History\n\n## v1.0.0 — ${new Date().toISOString().split('T')[0]}\n\n**触发原因**: 初始同步/补全记录\n**变更内容**:\n1. 初始化技能进化记录文件。\n`
         fs.writeFileSync(evolutionFile, initialContent, 'utf-8')
@@ -276,17 +291,13 @@ export async function syncCommand(options: { dir: string, repo?: string }) {
     })
     s_push.stop(pc.green(`🚀 已成功同步并推送至远程仓库 [${branch}]！`))
   } catch (e: any) {
-    if (repoPath?.startsWith('http') || repoPath?.startsWith('git@')) {
-      s_push.stop(pc.red('❌ 远程推送失败。'))
-    } else {
-      s_push.stop(pc.yellow('⚠️  本地仓库已更新，但推送远程(如果有)失败。'))
-    }
+    s_push.stop(pc.red('❌ 推送到远程失败，请检查网络或权限。'))
     console.error(e)
   }
 
   // 如果是临时目录，清理掉
-  if (isTempRepo) {
-    await fs.remove(tempRepoPath)
+  if (isRemoteMode && fs.existsSync(tempPath)) {
+    await fs.remove(tempPath)
   }
 
   p.outro(pc.green('全部同步任务已完成！'))
