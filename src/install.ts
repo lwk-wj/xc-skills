@@ -55,7 +55,7 @@ export async function installSkills(options: InstallOptions) {
 
         if (method === 'symlink') {
           await fs.ensureDir(dest)
-          
+
           // 核心修复：如果源端没有 EVOLUTION.md，先补齐它，确保软链接能成功建立
           const srcEvolution = join(src, 'EVOLUTION.md')
           if (!await fs.pathExists(srcEvolution)) {

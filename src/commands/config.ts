@@ -1,6 +1,6 @@
 import fs from 'fs-extra'
-import { resolve } from 'node:path'
-import { homedir } from 'node:os'
+import { resolve, join } from 'node:path'
+import os, { homedir } from 'node:os'
 import * as p from '@clack/prompts'
 import pc from 'picocolors'
 
@@ -129,51 +129,86 @@ export async function configCommand(options: { repo?: string }) {
   p.log.message(`  ${pc.dim('默认发布分支:')} ${pc.yellow(newConfig.defaultBranch)}`)
   p.log.message(`  ${pc.dim('技能分组:')} ${pc.blue(newConfig.defaultGroups?.join(' | '))}`)
 
-  // --- 自动化克隆逻辑 ---
-  if (newConfig.mode === 'local' && !fs.existsSync(newConfig.repoPath)) {
-    const shouldClone = await p.confirm({
-      message: pc.yellow(`检测到本地目录 ${newConfig.repoPath} 不存在，是否立即克隆远程仓库？`),
-      initialValue: true
-    })
+  // --- 自动化克隆与分支对齐逻辑 ---
+  const isRemoteMode = newConfig.mode === 'remote'
+  const targetPath = isRemoteMode ? join(os.tmpdir(), `xc-skills-init-${Date.now()}`) : newConfig.repoPath
+  const needsCheck = isRemoteMode || !fs.existsSync(newConfig.repoPath)
 
-    if (shouldClone && !p.isCancel(shouldClone)) {
-      const s = p.spinner()
-      s.start(`正在准备克隆仓库 [${newConfig.defaultBranch}]...`)
+  if (needsCheck) {
+    const s = p.spinner()
+    s.start(`正在检查远程分支 [${newConfig.defaultBranch}]...`)
+    
+    const { execSync } = await import('node:child_process')
+    const { dirname } = await import('node:path')
+    
+    try {
+      // 1. 检查远程分支是否存在 (不拉取代码，只查头)
+      let branchExists = false
       try {
-        const { execSync } = await import('node:child_process')
-        const { dirname } = await import('node:path')
-        
-        // 确保父级目录存在
-        const parentDir = dirname(newConfig.repoPath)
-        await fs.ensureDir(parentDir)
-        
-        try {
-          // 尝试直接克隆指定分支
-          execSync(`git clone --branch ${newConfig.defaultBranch} ${newConfig.remoteUrl} "${newConfig.repoPath}"`, { 
-            stdio: 'ignore',
-            env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
-          })
-          s.stop(pc.green(`仓库克隆完成！已存至: ${newConfig.repoPath}`))
-        } catch (cloneErr) {
-          // 如果克隆失败，尝试从默认分支（如 master）切出来
-          s.message(pc.yellow(`分支 ${newConfig.defaultBranch} 不存在，正在尝试从 master 分支创建并同步...`))
-          
-          // 1. 先克隆主分支
-          execSync(`git clone ${newConfig.remoteUrl} "${newConfig.repoPath}"`, { 
-            stdio: 'ignore',
-            env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
-          })
-          
-          // 2. 切出新分支并推送到远程
-          const gitOpts = { cwd: newConfig.repoPath, stdio: 'ignore' as const, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }
-          execSync(`git checkout -b ${newConfig.defaultBranch}`, gitOpts)
-          execSync(`git push origin ${newConfig.defaultBranch}`, gitOpts)
-          
-          s.stop(pc.green(`分支已创建并推送到远程：${newConfig.defaultBranch}`))
+        const remoteInfo = execSync(`git ls-remote --heads ${newConfig.remoteUrl} ${newConfig.defaultBranch}`, { stdio: 'pipe' }).toString()
+        branchExists = !!remoteInfo.trim()
+      } catch (e) {
+        // 如果连 ls-remote 都失败，可能是网络或权限问题，交给外层 catch
+      }
+
+      if (branchExists) {
+        // 如果分支存在，且是 Local 模式且目录不存在，则执行克隆
+        if (!isRemoteMode && !fs.existsSync(targetPath)) {
+          s.message(`正在克隆已有分支 [${newConfig.defaultBranch}]...`)
+          await fs.ensureDir(dirname(targetPath))
+          try {
+            execSync(`git clone --branch ${newConfig.defaultBranch} ${newConfig.remoteUrl} "${targetPath}"`, { 
+              stdio: 'pipe',
+              env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+            })
+            s.stop(pc.green(`仓库已就绪：${targetPath}`))
+          } catch (cloneErr: any) {
+            const errorMsg = cloneErr.stderr?.toString() || cloneErr.message
+            s.stop(pc.red(`克隆失败: ${errorMsg.split('\n')[0]}`))
+            throw cloneErr
+          }
+        } else {
+          s.stop(pc.green(`远程分支 [${newConfig.defaultBranch}] 已存在，配置完成。`))
         }
-      } catch (err: any) {
-        s.stop(pc.red('初始化失败，请检查网络、权限或远程地址是否正确。'))
-        p.log.error(err.message)
+      } else {
+        // 如果分支不存在，询问是否创建
+        s.stop()
+        const shouldCreate = await p.confirm({
+          message: pc.yellow(`远程分支 ${newConfig.defaultBranch} 不存在，是否立即基于 master 创建并同步？`),
+          initialValue: true
+        })
+
+        if (shouldCreate && !p.isCancel(shouldCreate)) {
+          const s2 = p.spinner()
+          s2.start(`正在初始化新分支 [${newConfig.defaultBranch}]...`)
+          try {
+            await fs.ensureDir(dirname(targetPath))
+            // 1. 先克隆主分支
+            execSync(`git clone ${newConfig.remoteUrl} "${targetPath}"`, { 
+              stdio: 'pipe',
+              env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
+            })
+            
+            // 2. 切出新分支并推送到远程
+            const gitOpts = { cwd: targetPath, stdio: 'pipe' as const, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } }
+            execSync(`git checkout -b ${newConfig.defaultBranch}`, gitOpts)
+            execSync(`git push -u origin ${newConfig.defaultBranch}`, gitOpts)
+            
+            s2.stop(pc.green(`分支已成功创建、推送并建立追踪关系：${newConfig.defaultBranch}`))
+          } catch (err: any) {
+            const errorMsg = err.stderr?.toString() || err.message
+            s2.stop(pc.red(`分支创建失败: ${errorMsg.split('\n')[0]}`))
+            throw err
+          }
+        }
+      }
+    } catch (err: any) {
+      const errorMsg = err.stderr?.toString() || err.message
+      s.stop(pc.red(`环境检查失败: ${errorMsg.split('\n')[0]}`))
+    } finally {
+      // 如果是远程模式产生的临时目录，清理掉
+      if (isRemoteMode && fs.existsSync(targetPath)) {
+        await fs.remove(targetPath)
       }
     }
   }
