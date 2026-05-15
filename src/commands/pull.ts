@@ -29,29 +29,31 @@ export async function pullCommand(dirArg: string | undefined) {
     s_clone.start(`正在从远程仓库同步 [${branch}]...`)
     try {
       execSync(`git clone --depth 1 --branch ${branch} ${repoPath} ${tempRepoPath}`, {
-        stdio: 'ignore',
+        stdio: 'pipe',
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
       })
       repoPath = tempRepoPath
       isTempRepo = true
       s_clone.stop(`远程同步完成 [${branch}]`)
     } catch (err: any) {
-      s_clone.stop(pc.red('远程同步失败，请检查网络、分支名或权限'))
+      const errorMsg = err.stderr?.toString() || err.message
+      s_clone.stop(pc.red(`远程同步失败: ${errorMsg.split('\n')[0]}`))
       process.exit(1)
     }
   } else {
     repoPath = resolve(repoPath)
     const s_resync = p.spinner()
-    s_resync.start(`正在同步本地中央仓库 [${branch}]...`)
+    s_resync.start(`正在对齐远程状态 [${branch}]...`)
     try {
-      execSync(`git fetch origin ${branch} && git reset --hard origin/${branch}`, {
-        cwd: repoPath,
-        stdio: 'ignore',
+      execSync(`git pull --rebase --autostash origin ${branch}`, { 
+        cwd: repoPath, 
+        stdio: 'pipe',
         env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }
       })
-      s_resync.stop(`本地仓库已同步 [${branch}]`)
-    } catch (e) {
-      s_resync.stop(pc.yellow('本地同步跳过（可能尚未关联远程或网络原因）'))
+      s_resync.stop(`本地中央仓库已就绪 [${branch}]`)
+    } catch (e: any) {
+      const errorMsg = e.stderr?.toString() || e.message
+      s_resync.stop(pc.yellow(`远程同步跳过: ${errorMsg.split('\n')[0]}`))
     }
   }
 
